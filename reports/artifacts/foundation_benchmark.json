@@ -1,0 +1,39 @@
+{
+  "models": [
+    "chronos-bolt"
+  ],
+  "rows": [
+    {
+      "horizon": 1,
+      "model": "chronos-bolt",
+      "status": "measured",
+      "MAE": 2667.549045242947,
+      "R2": 0.9022577239208688,
+      "WAPE": 0.0833101188180306
+    },
+    {
+      "horizon": 3,
+      "model": "chronos-bolt",
+      "status": "measured",
+      "MAE": 3442.028943748621,
+      "R2": 0.869384631958368,
+      "WAPE": 0.1073932959970813
+    },
+    {
+      "horizon": 6,
+      "model": "chronos-bolt",
+      "status": "measured",
+      "MAE": 5389.612653266223,
+      "R2": 0.7031096661892664,
+      "WAPE": 0.1673762791999582
+    },
+    {
+      "horizon": 12,
+      "model": "chronos-bolt",
+      "status": "measured",
+      "MAE": 8555.467868341533,
+      "R2": 0.4037234561797428,
+      "WAPE": 0.2516223746304494
+    }
+  ]
+}

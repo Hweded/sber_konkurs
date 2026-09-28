@@ -1,0 +1,1 @@
+"""СберИндекс forecasting pipeline package."""

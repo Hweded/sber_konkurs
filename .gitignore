@@ -1,0 +1,69 @@
+# Python, IDE и локальные настройки
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.env
+
+# Логи и временные результаты
+*.log
+catboost_info/
+logs/
+*.parquet
+reports/*.parquet
+reports/artifacts/*.parquet
+
+# Сырые, промежуточные и обработанные данные (п. 9.2 Положения)
+data/raw/*
+data/interim/*
+data/processed/*
+datasets/
+_diagnose*
+_env.txt
+reports/artifacts/slide*_check.png
+reports/artifacts/run.json
+reports/figures/case_study_*.png
+!reports/figures/case_study_d9f47c0990ce.png
+!reports/figures/case_study_6dd254fda2ee.png
+!reports/figures/case_study_5762f61cc65c.png
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+
+# Веса моделей и кэш HuggingFace
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+checkpoints/
+hf_cache/
+models/
+
+# Обязательные артефакты жюри
+!reports/artifacts/*.csv
+!reports/artifacts/*.json
+!reports/artifacts/*.md
+!reports/figures/*.png
+!presentation.pdf
+
+# Неаудированные рабочие заметки и артефакты проверки PDF
+reports/*.md
+reports/artifacts/run.json
+reports/artifacts/slide*_check.png
+reports/figures/case_study_*.png
+!reports/figures/case_study_d9f47c0990ce.png
+!reports/figures/case_study_6dd254fda2ee.png
+!reports/figures/case_study_5762f61cc65c.png

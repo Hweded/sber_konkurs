@@ -1,0 +1,9 @@
+{
+  "status": "measured",
+  "n": 12513,
+  "baseline_mae": 2064.275859538603,
+  "news_mae": 2194.579492898576,
+  "mae_delta": -130.303633359973,
+  "mae_improvement_pct": -6.312316871694553,
+  "leakage_check": "passed"
+}

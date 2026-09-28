@@ -1,0 +1,22 @@
+{
+  "entities": 2105,
+  "rows": 12537,
+  "methods": [
+    "pelt",
+    "binseg",
+    "cusum",
+    "residual",
+    "residual_news"
+  ],
+  "split_entities": 5,
+  "macro_alert_share": 0.085,
+  "interpretation": "Метрики согласованности описательные; экономическая проверка использует фиксированные события ДКП.",
+  "event_catalog": "extended",
+  "reference_events": 6,
+  "detection_metrics": [
+    "precision",
+    "recall",
+    "f1",
+    "detection_delay_months"
+  ]
+}

@@ -1,0 +1,347 @@
+{
+  "device": {
+    "mode": "auto",
+    "fallback_to_cpu_on_oom": true,
+    "batch_size": 256
+  },
+  "ensemble": {
+    "enabled": true,
+    "method": "weighted_average",
+    "metric_to_optimize": "MAE",
+    "alpha_bounds": [
+      0.5,
+      1.0
+    ],
+    "default_alpha": 0.82
+  },
+  "paths": {
+    "supervised": "data\\processed\\supervised.parquet",
+    "artifacts": "reports\\artifacts"
+  },
+  "validation": {
+    "n_splits": 3,
+    "horizons": [
+      1,
+      3,
+      6,
+      12
+    ],
+    "horizon": 1,
+    "fold_size": 2,
+    "gap": 0,
+    "min_train_periods": 6,
+    "frequency": "MS",
+    "time_column": "origin",
+    "target_end_column": "target_end",
+    "availability_column": "available_at",
+    "entity_column": "region_id",
+    "target_column": "target",
+    "feature_columns": [
+      "month",
+      "quarter",
+      "sin_month",
+      "cos_month",
+      "y_lag_1",
+      "y_lag_2",
+      "y_lag_3",
+      "y_lag_12",
+      "growth_mom",
+      "growth_yoy",
+      "y_rolling_mean_3",
+      "y_rolling_std_3",
+      "y_rolling_min_3",
+      "y_rolling_max_3",
+      "y_rolling_mean_12",
+      "y_rolling_std_12",
+      "y_rolling_min_12",
+      "y_rolling_max_12"
+    ]
+  },
+  "reproducibility": {
+    "seed": 42,
+    "deterministic_torch": true,
+    "threads": 1
+  },
+  "models": {
+    "prophet": {
+      "growth": "linear",
+      "seasonality_mode": "additive",
+      "yearly_seasonality": false,
+      "weekly_seasonality": false,
+      "daily_seasonality": false,
+      "n_changepoints": 2,
+      "changepoint_prior_scale": 0.05,
+      "seasonality_prior_scale": 10.0,
+      "uncertainty_samples": 0
+    },
+    "catboost": {
+      "loss_function": "MAE",
+      "eval_metric": "MAE",
+      "iterations": 1200,
+      "depth": 6,
+      "learning_rate": 0.03,
+      "l2_leaf_reg": 5.0,
+      "task_type": "CPU",
+      "allow_writing_files": false,
+      "verbose": false
+    },
+    "chronos": {
+      "model_id": "amazon/chronos-bolt-small",
+      "revision": "772f3d25d38aec6d914c8949dab4462e2d46f5d8",
+      "device": "auto",
+      "dtype": "float32",
+      "context_length": 512,
+      "prediction_length": 1,
+      "point_forecast": "median",
+      "zero_shot": true
+    },
+    "foundation_models": [
+      "chronos-bolt"
+    ]
+  },
+  "optimization": {
+    "enabled": false,
+    "sampler": "TPESampler",
+    "n_trials": 50,
+    "inner_n_splits": 3,
+    "objective": "MAE"
+  },
+  "data": {
+    "directory": "datasets",
+    "separator": ";",
+    "target": {
+      "pattern": "potrebitelskie-beznalicnye-rashody-na-urovne-munizipalnyh-obrazovanij_ru_1764079373653.csv",
+      "category_column": "category_15",
+      "category_mode": "select",
+      "category": "Все категории",
+      "sum_categories": [],
+      "unit": "руб.",
+      "duplicate_policy": "exclude_ambiguous_mo"
+    },
+    "macro_sources": [
+      {
+        "name": "spending",
+        "pattern": "consumer-spending_ru_*.csv",
+        "dimensions": [
+          "type",
+          "ref_area"
+        ],
+        "frequency": "Месяц",
+        "aggregation": "mean",
+        "required": true
+      },
+      {
+        "name": "spending_growth",
+        "pattern": "consumer-spending-growth_ru_*.csv",
+        "dimensions": [
+          "value_type",
+          "type",
+          "ref_area"
+        ],
+        "frequency": "Месяц",
+        "aggregation": "mean",
+        "required": true
+      },
+      {
+        "name": "spending_sa",
+        "pattern": "consumper-spending-index-sa_ru_*.csv",
+        "dimensions": [
+          "type",
+          "ref_area"
+        ],
+        "frequency": "Месяц",
+        "aggregation": "mean",
+        "required": true
+      },
+      {
+        "name": "activity_age",
+        "pattern": "potrebitelskaya-aktivnost-po-kategoriyam*.csv",
+        "dimensions": [
+          "ipa_type",
+          "age",
+          "ref_area"
+        ],
+        "frequency": "Неделя",
+        "aggregation": "mean",
+        "required": true
+      },
+      {
+        "name": "category_growth",
+        "pattern": "ver-izmenenie-trat-po-kategoriyam_ru*.csv",
+        "dimensions": [
+          "category"
+        ],
+        "frequency": "Неделя",
+        "aggregation": "mean",
+        "required": true
+      }
+    ],
+    "macro_lag_months": 1,
+    "rosstat_sources": [
+      {
+        "path": "datasets\\rosstat_wages.csv",
+        "name": "wages",
+        "required": false,
+        "format": "auto",
+        "read_timeout_seconds": 60,
+        "max_file_size_mb": 512,
+        "max_rows": 2000000,
+        "sheet_name": null,
+        "header_row": null,
+        "separator": ",",
+        "encoding": "utf-8-sig",
+        "entity_column": "mo",
+        "period_column": "period",
+        "release_column": "released_at",
+        "value_columns": [
+          "wage"
+        ],
+        "region_mapping": null,
+        "autodiscover": false,
+        "required_fields": []
+      },
+      {
+        "path": "datasets\\rosstat_employment.csv",
+        "name": "employment",
+        "required": false,
+        "format": "auto",
+        "read_timeout_seconds": 60,
+        "max_file_size_mb": 512,
+        "max_rows": 2000000,
+        "sheet_name": null,
+        "header_row": null,
+        "separator": ",",
+        "encoding": "utf-8-sig",
+        "entity_column": "mo",
+        "period_column": "period",
+        "release_column": "released_at",
+        "value_columns": [
+          "employment"
+        ],
+        "region_mapping": null,
+        "autodiscover": false,
+        "required_fields": []
+      }
+    ],
+    "nlp": {
+      "enabled": true,
+      "path": "datasets\\lenta-ru-news.csv",
+      "cache": "data\\processed\\news_monthly_features.parquet",
+      "chunksize": 50000,
+      "batch_size": 256,
+      "max_length": 128,
+      "topics": [
+        "Экономика"
+      ],
+      "tags": [
+        "Экономика",
+        "Финансы",
+        "Бизнес"
+      ],
+      "model_id": "cointegrated/rubert-tiny-sentiment-balanced",
+      "revision": "main",
+      "device": "auto",
+      "mixed_precision": false,
+      "fallback_to_cpu_on_oom": true,
+      "lag_months": 1,
+      "shock_window": 3,
+      "min_date": "1999-01-01",
+      "publication_date_is_availability": true,
+      "telegram_input": null,
+      "news_json_paths": [
+        "datasets\\smartlab.json",
+        "datasets\\bank offshore.json",
+        "datasets\\RBK.json"
+      ],
+      "news_auto_discover": true,
+      "telegram_keywords": [
+        "инфляция",
+        "ставка",
+        "банк",
+        "цены",
+        "санкции",
+        "дефицит",
+        "налоги",
+        "бюджет",
+        "расходы",
+        "спрос",
+        "ввп",
+        "импорт",
+        "экспорт",
+        "рецессия",
+        "стагфляция"
+      ],
+      "telegram_min_length": 40,
+      "news_timezone": "Europe/Moscow",
+      "news_sentiment_enabled": false,
+      "news_strip_html": true,
+      "news_remove_urls": true,
+      "news_deduplicate": true,
+      "news_max_text_length": 10000
+    }
+  },
+  "features": {
+    "lags": [
+      1,
+      2,
+      3,
+      12
+    ],
+    "rolling_windows": [
+      3,
+      12
+    ],
+    "rolling_statistics": [
+      "mean",
+      "std",
+      "min",
+      "max"
+    ],
+    "warmup_months": 1,
+    "news_lag_months": 1
+  },
+  "changepoint_detection": {
+    "predictions": "reports/predictions_oof.parquet",
+    "news": "data/processed/news_monthly_features.parquet",
+    "output": "reports/detected_shocks.parquet",
+    "figures": "reports/figures",
+    "period_column": "period",
+    "entity_column": "mo",
+    "actual_column": "y",
+    "prediction_column": "catboost_prediction",
+    "availability_column": "actual_available_at",
+    "window": 24,
+    "min_history": 4,
+    "model": "rbf",
+    "pen": 2.5,
+    "min_size": 2,
+    "threshold": 2.0,
+    "drift": 0.5,
+    "residual_k": 1.8,
+    "residual_quantile": 0.9,
+    "tda_quantile": 0.85,
+    "macro_alert_share": 0.085,
+    "national_history": "datasets/potrebitelskie-beznalicnye-rashody-na-urovne-munizipalnyh-obrazovanij_ru_1764079373653.csv",
+    "national_category_column": "category_15",
+    "national_category": "Все категории",
+    "news_k": 2.0,
+    "negative_sentiment": -0.3,
+    "news_lookback": 2,
+    "event_tolerance": 3,
+    "max_figures": 5,
+    "event_catalog": "extended"
+  },
+  "tda": {
+    "enabled": true,
+    "window_size": 5,
+    "embedding_dimension": 3,
+    "time_delay": 1,
+    "homology_dimensions": [
+      0,
+      1
+    ],
+    "metric": "euclidean",
+    "cache_path": "data\\processed\\tda_features.parquet",
+    "shock_threshold_std": 2.5
+  }
+}

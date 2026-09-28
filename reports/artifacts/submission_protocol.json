@@ -1,0 +1,22 @@
+{
+  "origin": "2024-07-01T00:00:00+00:00",
+  "training_last_period": "2024-06-01T00:00:00+00:00",
+  "periods": [
+    "2024-07-01T00:00:00+00:00",
+    "2024-08-01T00:00:00+00:00",
+    "2024-09-01T00:00:00+00:00",
+    "2024-10-01T00:00:00+00:00",
+    "2024-11-01T00:00:00+00:00",
+    "2024-12-01T00:00:00+00:00"
+  ],
+  "rows": 12564,
+  "entities": 2094,
+  "roster_source": "initial_submission.csv; official code mapping not supplied",
+  "roster_sha256": "ae22b594f18ef50372e55d8ff67c63dd9535a86e3018e7eeb5a1dba590338582",
+  "protocol": "recursive_frozen_origin",
+  "future_external_features": "frozen at origin",
+  "submission_model": "prophet",
+  "model_selection": "lowest pooled h=1 MAE and lower h=6 MAE on measured OOF",
+  "observed_values_after_origin_used": false,
+  "cold_start_entities": 0
+}

@@ -28,3 +28,30 @@ def test_recursive_path_is_invariant_to_future_targets():
 def test_direct_purge_excludes_unreleased_target_month():
     config = ValidationConfig(feature_columns=("x",))
     assert _direct_validation_config(config, 6).gap >= 6
+
+
+def test_recursive_path_coerces_nullable_frozen_features():
+    history = pd.DataFrame(
+        {
+            "mo": ["a"] * 3,
+            "period": pd.date_range("2024-01-01", periods=3, freq="MS"),
+            "y": [10.0, 20.0, 30.0],
+        }
+    )
+    origin = pd.Timestamp("2024-04-01")
+    frozen = pd.DataFrame(
+        {"mo": ["a"], "macro_missing": pd.array([pd.NA], dtype="Float64")}
+    )
+    imputer = SimpleImputer(keep_empty_features=True).fit([[30.0, 0.0]])
+
+    result = recursive_catboost_path(
+        LagIncrementModel(),
+        imputer,
+        history,
+        origin,
+        [origin],
+        ["y_lag_1", "macro_missing"],
+        frozen_features=frozen,
+    )
+
+    np.testing.assert_array_equal(result.pred_catboost, [31.0])

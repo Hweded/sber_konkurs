@@ -1,4 +1,5 @@
 """Типизированные настройки чтения источников и причинных признаков."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -80,7 +81,7 @@ class NLPConfig(ETLConfig):
     lag_months: PositiveInt = 1
     shock_window: PositiveInt = 3
     min_date: str = "1999-01-01"
-    # NOTE: без first_seen_at остаётся считать дату архива датой доступности.
+    # Без first_seen_at остаётся считать дату архива датой доступности.
     publication_date_is_availability: bool = True
     telegram_input: Path | None = None
     news_json_paths: tuple[Path, ...] = ()
@@ -115,7 +116,12 @@ class DataConfig(ETLConfig):
 class FeatureConfig(ETLConfig):
     lags: tuple[PositiveInt, ...] = (1, 2, 3, 12)
     rolling_windows: tuple[PositiveInt, ...] = (3, 12)
-    rolling_statistics: tuple[Literal["mean", "std", "min", "max"], ...] = ("mean", "std", "min", "max")
+    rolling_statistics: tuple[Literal["mean", "std", "min", "max"], ...] = (
+        "mean",
+        "std",
+        "min",
+        "max",
+    )
     warmup_months: PositiveInt = 12
     news_lag_months: PositiveInt = 1
 

@@ -11,12 +11,43 @@
   ],
   "rows": 12564,
   "entities": 2094,
-  "roster_source": "initial_submission.csv; official code mapping not supplied",
+  "roster_source": "configs\\submission_roster.csv",
   "roster_sha256": "ae22b594f18ef50372e55d8ff67c63dd9535a86e3018e7eeb5a1dba590338582",
   "protocol": "recursive_frozen_origin",
   "future_external_features": "frozen at origin",
-  "submission_model": "prophet",
-  "model_selection": "lowest pooled h=1 MAE and lower h=6 MAE on measured OOF",
+  "submission_model": "RegimeAware Ensemble",
+  "model_selection": "OOF-calibrated three-arm RegimeAware weights",
+  "ensemble_weights_path": "configs\\candidate_oof_optimum.json",
+  "ensemble_weights": {
+    "1": [
+      0.563,
+      0.437,
+      0.0
+    ],
+    "3": [
+      0.775,
+      0.084,
+      0.141
+    ],
+    "6": [
+      0.85,
+      0.15,
+      0.0
+    ],
+    "12": [
+      0.07,
+      0.93,
+      0.0
+    ]
+  },
+  "memory_safe_mode": false,
+  "catboost_border_count": 254,
+  "feature_downcast": false,
+  "chronos_batch_size": 128,
+  "chronos_inference_mode": "cpu",
+  "base_forecasts_reused": false,
+  "base_forecasts_source": "newly computed",
+  "base_forecasts_training_revalidated": true,
   "observed_values_after_origin_used": false,
   "cold_start_entities": 0
 }

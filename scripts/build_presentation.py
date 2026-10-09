@@ -1,4 +1,5 @@
 """CLI-компилятор презентации из артефактов текущего прогона."""
+
 from __future__ import annotations
 
 import argparse

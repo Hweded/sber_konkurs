@@ -1,4 +1,5 @@
 """Сборка полной конкурсной сетки прогнозов с жёсткой валидацией."""
+
 from __future__ import annotations
 
 import hashlib
@@ -17,7 +18,7 @@ DEFAULT_ROWS = DEFAULT_ENTITY_COUNT * len(DEFAULT_PERIODS)
 
 
 class SubmissionValidator:
-    """Выбирает CatBoost, восстанавливает полную сетку МО × месяц и сохраняет CSV."""
+    """Выбирает финальный forecast arm и сохраняет полную сетку МО × месяц."""
 
     def __init__(
         self,
@@ -29,24 +30,26 @@ class SubmissionValidator:
 
     @staticmethod
     def _prediction_column(predictions: pd.DataFrame, requested: str | None) -> str:
-        candidates = tuple(
-            dict.fromkeys(
-                column
-                for column in (requested, "pred_catboost", "catboost_prediction", "pred_prophet", "pred_ensemble", "ensemble_prediction", "prediction")
-                if column is not None
+        target_col = requested or "pred_regime_aware"
+        if target_col not in predictions.columns:
+            raise KeyError(
+                f"Критическая ошибка: колонка {target_col} отсутствует в прогнозах! "
+                "Скрытый фоллбэк запрещён."
             )
-        )
-        selected = next((column for column in candidates if column in predictions.columns), None)
-        if selected is None:
-            raise ValueError(f"Нет поддерживаемой колонки прогноза; проверены {candidates}")
-        LOGGER.info("Для финального submission выбран %s", selected)
-        return selected
+        LOGGER.info("Для финального submission выбран %s", target_col)
+        return target_col
 
     @staticmethod
-    def _entities(predictions: pd.DataFrame, entity_column: str, expected_entities: int | None) -> pd.Index:
-        entities = pd.Index(predictions[entity_column].dropna().astype("string").unique(), name=entity_column).sort_values()
+    def _entities(
+        predictions: pd.DataFrame, entity_column: str, expected_entities: int | None
+    ) -> pd.Index:
+        entities = pd.Index(
+            predictions[entity_column].dropna().astype("string").unique(), name=entity_column
+        ).sort_values()
         if expected_entities is not None and len(entities) != expected_entities:
-            raise ValueError(f"Ожидалось {expected_entities} уникальных МО, получено {len(entities)}")
+            raise ValueError(
+                f"Ожидалось {expected_entities} уникальных МО, получено {len(entities)}"
+            )
         if entities.empty:
             raise ValueError("Список МО пуст")
         return entities
@@ -54,8 +57,12 @@ class SubmissionValidator:
     @staticmethod
     def _fill_predictions(frame: pd.DataFrame, entity_column: str) -> pd.DataFrame:
         result = frame.sort_values([entity_column, "period"], kind="stable").copy()
-        result["pred"] = result.groupby(entity_column, observed=True)["pred"].transform(lambda group: group.ffill().bfill())
-        result["pred"] = result["pred"].fillna(result.groupby("period", observed=True)["pred"].transform("median"))
+        result["pred"] = result.groupby(entity_column, observed=True)["pred"].transform(
+            lambda group: group.ffill().bfill()
+        )
+        result["pred"] = result["pred"].fillna(
+            result.groupby("period", observed=True)["pred"].transform("median")
+        )
         if result["pred"].isna().any():
             global_median = float(result["pred"].median())
             if not np.isfinite(global_median):
@@ -73,8 +80,7 @@ class SubmissionValidator:
         past["period"] = pd.to_datetime(past["period"], errors="raise").dt.tz_localize(None)
         past["y"] = pd.to_numeric(past["y"], errors="coerce")
         past = past.loc[
-            past["mo"].notna() & past["period"].notna()
-            & np.isfinite(past["y"]) & past["y"].gt(0)
+            past["mo"].notna() & past["period"].notna() & np.isfinite(past["y"]) & past["y"].gt(0)
         ]
         if past.duplicated(["mo", "period"]).any():
             raise ValueError("История содержит дубликаты ключей mo/period")
@@ -82,10 +88,14 @@ class SubmissionValidator:
         if missing.empty:
             return frame
         missing["_row"] = missing.index
-        # The target month itself and later observations are unavailable at origin.
+        # На origin недоступны target-month и последующие наблюдения.
         fallback = pd.merge_asof(
-            missing.sort_values("period"), past.sort_values("period"),
-            on="period", by="mo", direction="backward", allow_exact_matches=False,
+            missing.sort_values("period"),
+            past.sort_values("period"),
+            on="period",
+            by="mo",
+            direction="backward",
+            allow_exact_matches=False,
         )
         cold_start = int(fallback["y"].isna().sum())
         for period, subset in fallback.loc[fallback["y"].isna()].groupby("period"):
@@ -98,7 +108,9 @@ class SubmissionValidator:
         LOGGER.warning(
             "Submission fallback: %d строк восстановлены по истории до целевого месяца "
             "(last-positive-value=%d, cold-start median=%d)",
-            len(fallback), len(fallback) - cold_start, cold_start,
+            len(fallback),
+            len(fallback) - cold_start,
+            cold_start,
         )
         return result
 
@@ -128,9 +140,18 @@ class SubmissionValidator:
         if missing:
             raise ValueError(f"В прогнозах отсутствуют колонки: {sorted(missing)}")
         source_column = self._prediction_column(predictions, prediction_column)
-        source = predictions[["mo", "period", source_column]].rename(columns={source_column: "pred"}).copy()
+        source = (
+            predictions[["mo", "period", source_column]]
+            .rename(columns={source_column: "pred"})
+            .copy()
+        )
         source["mo"] = source["mo"].astype("string")
-        source["period"] = pd.to_datetime(source["period"], errors="raise").dt.tz_localize(None).dt.to_period("M").dt.to_timestamp()
+        source["period"] = (
+            pd.to_datetime(source["period"], errors="raise")
+            .dt.tz_localize(None)
+            .dt.to_period("M")
+            .dt.to_timestamp()
+        )
         source["pred"] = pd.to_numeric(source["pred"], errors="coerce")
         source = source.loc[source["period"].isin(periods)].copy()
         if source.duplicated(["mo", "period"]).any():
@@ -140,35 +161,51 @@ class SubmissionValidator:
         if entity_universe is not None:
             roster = pd.DataFrame({"mo": list(entity_universe)})
         else:
-            # OOF covers evaluated entities only; the fixed file defines the delivery roster.
+            # OOF покрывает оценённые МО; фиксированный файл задаёт roster поставки.
             roster = existing if existing is not None else predictions
         entities = self._entities(roster, "mo", expected_entities)
         unknown = set(predictions["mo"].dropna().astype("string")) - set(entities)
         if unknown:
             raise ValueError(f"В прогнозах есть МО вне списка submission: {sorted(unknown)[:5]}")
-        full_grid = pd.MultiIndex.from_product([entities, periods], names=["mo", "period"]).to_frame(index=False)
+        full_grid = pd.MultiIndex.from_product(
+            [entities, periods], names=["mo", "period"]
+        ).to_frame(index=False)
         result = full_grid.merge(source, on=["mo", "period"], how="left", validate="one_to_one")
         missing_before = int(result["pred"].isna().sum())
+        if source_column == "pred_regime_aware" and missing_before:
+            raise ValueError(
+                f"Критическая ошибка: отсутствуют {missing_before} прогнозов pred_regime_aware в полной конкурсной сетке"
+            )
         if history is not None:
             result = self._fill_from_history(result, history)
         result = self._fill_predictions(result, "mo")
         result = result.sort_values(["mo", "period"], kind="stable").reset_index(drop=True)
         expected = expected_rows if expected_rows is not None else len(entities) * len(periods)
-        assert len(result) == expected, f"Ожидалось {expected} строк submission, получено {len(result)}"
+        assert len(result) == expected, (
+            f"Ожидалось {expected} строк submission, получено {len(result)}"
+        )
         assert result["pred"].isna().sum() == 0, "Submission содержит NaN"
         values = result["pred"].to_numpy(dtype=np.float64)
         if not np.isfinite(values).all():
             raise ValueError("Submission содержит Inf")
-        assert int((result["pred"] <= 0).sum()) == 0, "Все прогнозы должны быть строго положительными"
+        assert int((result["pred"] <= 0).sum()) == 0, (
+            "Все прогнозы должны быть строго положительными"
+        )
         assert not result.duplicated(["mo", "period"]).any(), "Submission содержит дубликаты"
-        # The root submission and audited candidate must describe one run.
+        # Корневой submission и проверенная копия должны относиться к одному запуску.
         same_path = self.root_output.resolve() == self.output.resolve()
         self._write_atomic(result, self.output)
         if not same_path:
             self._write_atomic(result, self.root_output)
         digest = hashlib.md5(self.output.read_bytes()).hexdigest()
         quantiles = result["pred"].quantile([0.0, 0.25, 0.5, 0.75, 1.0]).to_dict()
-        LOGGER.info("Submission rows=%d filled=%d md5=%s quantiles=%s", len(result), missing_before, digest, quantiles)
+        LOGGER.info(
+            "Submission rows=%d filled=%d md5=%s quantiles=%s",
+            len(result),
+            missing_before,
+            digest,
+            quantiles,
+        )
         return result
 
     def build_from_parquet(self, path: Path, **kwargs: Any) -> pd.DataFrame:
@@ -188,6 +225,8 @@ def build_submission(
 ) -> pd.DataFrame:
     """Публичная функция для CLI и программного запуска."""
     return SubmissionValidator(output, root_output).build_from_parquet(
-        predictions_path, entity_universe=entity_universe, history=history,
+        predictions_path,
+        entity_universe=entity_universe,
+        history=history,
         prediction_column=prediction_column,
     )

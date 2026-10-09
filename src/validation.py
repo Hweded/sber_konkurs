@@ -1,4 +1,5 @@
 """Rolling-origin CV региональной панели с purging по доступности цели."""
+
 from __future__ import annotations
 
 import logging
@@ -46,8 +47,11 @@ class ValidationConfig(BaseModel):
         if self.gap < self.horizon - 1:
             raise ValueError("gap должен быть >= horizon - 1 для direct-прогноза")
         metadata = (
-            self.time_column, self.target_end_column, self.availability_column,
-            self.entity_column, self.target_column,
+            self.time_column,
+            self.target_end_column,
+            self.availability_column,
+            self.entity_column,
+            self.target_column,
         )
         if len(set(metadata)) != len(metadata):
             raise ValueError("Имена метаданных должны быть различны")
@@ -96,8 +100,12 @@ class Regressor(Protocol):
 def prepare_panel(frame: pd.DataFrame, config: ValidationConfig) -> pd.DataFrame:
     """Проверяет временной контракт панели без импутации и масштабирования."""
     required = {
-        config.time_column, config.target_end_column, config.availability_column,
-        config.entity_column, config.target_column, *config.feature_columns,
+        config.time_column,
+        config.target_end_column,
+        config.availability_column,
+        config.entity_column,
+        config.target_column,
+        *config.feature_columns,
     }
     missing = required.difference(frame.columns)
     if missing:
@@ -119,7 +127,7 @@ def prepare_panel(frame: pd.DataFrame, config: ValidationConfig) -> pd.DataFrame
     if not dates.equals(expected):
         raise ValueError("Даты не образуют регулярную сетку заданной частоты")
     extended = pd.date_range(dates[0], periods=len(dates) + config.horizon, freq=config.frequency)
-    target_dates = pd.Series(extended[config.horizon:], index=dates)
+    target_dates = pd.Series(extended[config.horizon :], index=dates)
     if not panel[config.target_end_column].equals(panel[config.time_column].map(target_dates)):
         raise ValueError("target_end не соответствует origin + horizon")
     if (panel[config.availability_column] >= panel[config.time_column]).any():
@@ -137,14 +145,18 @@ def _folds(panel: pd.DataFrame, config: ValidationConfig) -> Iterator[TemporalFo
     dates = pd.DatetimeIndex(panel[config.time_column].unique()).sort_values()
     initial_size = len(dates) - config.n_splits * config.fold_size - config.gap
     if initial_size < config.min_train_periods:
-        raise ValueError(f"Первый train содержит {initial_size} периодов; нужно {config.min_train_periods}")
+        raise ValueError(
+            f"Первый train содержит {initial_size} периодов; нужно {config.min_train_periods}"
+        )
     splitter = TimeSeriesSplit(
-        n_splits=config.n_splits, test_size=config.fold_size,
-        gap=config.gap, max_train_size=None,
+        n_splits=config.n_splits,
+        test_size=config.fold_size,
+        gap=config.gap,
+        max_train_size=None,
     )
     for number, (train, test) in enumerate(splitter.split(dates), start=1):
         train_dates, test_dates = dates[train], dates[test]
-        # NOTE: равенство допустимо — origin трактуем как конец закрытого периода.
+        # Равенство допустимо — origin трактуем как конец закрытого периода.
         train_mask = panel[config.time_column].isin(train_dates) & (
             panel[config.target_end_column] <= test_dates[0]
         )
@@ -157,18 +169,23 @@ def _folds(panel: pd.DataFrame, config: ValidationConfig) -> Iterator[TemporalFo
         if cold_start:
             LOGGER.warning(
                 "Фолд %d: %d cold-start территорий сохранены в test; требуется fallback модели",
-                number, len(cold_start),
+                number,
+                len(cold_start),
             )
         yield TemporalFold(
             number=number,
             train_positions=tuple(int(i) for i in np.flatnonzero(train_mask.to_numpy())),
             test_positions=tuple(int(i) for i in np.flatnonzero(test_mask.to_numpy())),
-            train_start=train_dates[0].isoformat(), train_end=train_dates[-1].isoformat(),
-            test_start=test_dates[0].isoformat(), test_end=test_dates[-1].isoformat(),
+            train_start=train_dates[0].isoformat(),
+            train_end=train_dates[-1].isoformat(),
+            test_start=test_dates[0].isoformat(),
+            test_end=test_dates[-1].isoformat(),
         )
 
 
-def expanding_window_splits(frame: pd.DataFrame, config: ValidationConfig) -> tuple[TemporalFold, ...]:
+def expanding_window_splits(
+    frame: pd.DataFrame, config: ValidationConfig
+) -> tuple[TemporalFold, ...]:
     """Позиции относятся к результату prepare_panel, не к исходному frame."""
     return tuple(_folds(prepare_panel(frame, config), config))
 
@@ -215,8 +232,11 @@ def cross_validate(
             LOGGER.exception("Ошибка обучения/прогноза в фолде %s", fold.number)
             raise
         metric = FoldMetrics(
-            fold=fold.number, n_train=len(train), n_test=len(test),
-            mae=float(mean_absolute_error(y_test, predicted)), r2=_r2(y_test, predicted),
+            fold=fold.number,
+            n_train=len(train),
+            n_test=len(test),
+            mae=float(mean_absolute_error(y_test, predicted)),
+            r2=_r2(y_test, predicted),
         )
         LOGGER.info("Фолд %s: MAE=%.6f R²=%s", fold.number, metric.mae, metric.r2)
         results.append(metric)
@@ -224,6 +244,8 @@ def cross_validate(
         predictions.append(predicted)
     all_true, all_pred = np.concatenate(truths), np.concatenate(predictions)
     return ValidationReport(
-        folds=tuple(results), oof_mae=float(mean_absolute_error(all_true, all_pred)),
-        oof_r2=_r2(all_true, all_pred), n_predictions=len(all_true),
+        folds=tuple(results),
+        oof_mae=float(mean_absolute_error(all_true, all_pred)),
+        oof_r2=_r2(all_true, all_pred),
+        n_predictions=len(all_true),
     )

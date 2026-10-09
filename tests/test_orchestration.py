@@ -102,17 +102,18 @@ def test_changepoint_evaluation_accepts_modern_oof_columns() -> None:
     assert summary["entities"] == 1
 
 
-def test_submission_expands_grid_and_prefers_catboost(tmp_path: Path) -> None:
+def test_submission_expands_grid_with_explicit_candidate(tmp_path: Path) -> None:
     predictions = pd.DataFrame(
         {
             "mo": ["a", "a", "b", "b"],
             "period": pd.to_datetime(["2024-07-01", "2024-12-01", "2024-07-01", "2024-12-01"]),
             "pred_catboost": [10.0, 12.0, 20.0, 22.0],
+            "pred_regime_aware": [10.0, 12.0, 20.0, 22.0],
             "pred_ensemble": [100.0, 120.0, 200.0, 220.0],
         }
     )
     validator = SubmissionValidator(tmp_path / "reports/submission.csv", tmp_path / "submission.csv")
-    result = validator.build(predictions, expected_rows=12, expected_entities=2)
+    result = validator.build(predictions, expected_rows=12, expected_entities=2, prediction_column="pred_catboost")
     assert len(result) == 12
     assert result["pred"].notna().all()
     assert result.loc[result.mo.eq("a"), "pred"].tolist() == [10.0] * 5 + [12.0]
@@ -120,10 +121,11 @@ def test_submission_expands_grid_and_prefers_catboost(tmp_path: Path) -> None:
 
 
 def test_submission_rejects_nonpositive_predictions(tmp_path: Path) -> None:
-    predictions = pd.DataFrame({"mo": ["a"], "period": ["2024-07-01"], "pred_catboost": [0.0]})
+    predictions = pd.DataFrame({"mo": ["a"], "period": ["2024-07-01"], "pred_regime_aware": [0.0]})
     validator = SubmissionValidator(tmp_path / "report.csv", tmp_path / "root.csv")
     with pytest.raises(AssertionError, match="положительными"):
-        validator.build(predictions, expected_rows=6, expected_entities=1)
+        validator.build(predictions, expected_rows=1, expected_entities=1,
+                        periods=pd.DatetimeIndex(["2024-07-01"]))
 
 
 def test_changepoint_reference_metrics_use_day_tolerance() -> None:

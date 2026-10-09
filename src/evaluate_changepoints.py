@@ -1,4 +1,5 @@
 """Экономическая валидация детекторов структурных изменений."""
+
 from __future__ import annotations
 
 import json
@@ -55,17 +56,21 @@ def benchmark_offline_algorithms(
     pooled = frame.assign(period=pd.to_datetime(frame["period"], errors="raise"))
     pooled = pooled.groupby("period", observed=True)[[actual, prediction]].median().reset_index()
     pooled = pooled.rename(columns={actual: "y", prediction: "prediction"})
-    # This is a retrospective cost-function benchmark on the pooled level
-    # signal. It uses a global ruptures fit; the main detector remains causal.
-    # Report all fixed penalty values rather than selecting one by event F1.
+    # Это retrospective-бенчмарк; основной детектор остаётся причинным.
+    # Все фиксированные penalty выводятся без выбора по event F1.
     import ruptures as rpt
+
     signal = pooled["y"].to_numpy(dtype=float)
     signal = ((signal - np.nanmean(signal)) / max(float(np.nanstd(signal)), 1e-8)).reshape(-1, 1)
     rows: list[dict[str, Any]] = []
     for algorithm in ("l1", "l2", "rbf"):
         for penalty in (0.5, 1.0, 2.5):
             for method, estimator in (("pelt", rpt.Pelt), ("binseg", rpt.Binseg)):
-                breakpoints = estimator(model=algorithm, min_size=config.min_size, jump=1).fit(signal).predict(pen=penalty)[:-1]
+                breakpoints = (
+                    estimator(model=algorithm, min_size=config.min_size, jump=1)
+                    .fit(signal)
+                    .predict(pen=penalty)[:-1]
+                )
                 detected = pooled[["period"]].copy()
                 detected[f"{method}_shock"] = 0
                 detected[f"{method}_eligible"] = True
@@ -73,7 +78,10 @@ def benchmark_offline_algorithms(
                     if 0 < boundary < len(detected):
                         detected.loc[boundary, f"{method}_shock"] = 1
                 metrics = validate_against_reference_events(
-                    detected, event_catalog=event_catalog, methods=(method,), restrict_to_observed=True,
+                    detected,
+                    event_catalog=event_catalog,
+                    methods=(method,),
+                    restrict_to_observed=True,
                 )
                 for row in metrics.to_dict(orient="records"):
                     row["cost_model"] = algorithm
@@ -121,14 +129,22 @@ def _load_news_features(config: DetectionConfig) -> pd.DataFrame | None:
         "telegram_volume": "news_volume",
         "telegram_shock_score": "news_shock_score",
     }
-    news = news.rename(columns={old: new for old, new in aliases.items() if new not in news.columns})
+    news = news.rename(
+        columns={old: new for old, new in aliases.items() if new not in news.columns}
+    )
     required = {"period", "news_shock_score"}
     if not required.issubset(news.columns):
-        raise ValueError(f"Новостной кэш {source} не содержит {sorted(required.difference(news.columns))}")
+        raise ValueError(
+            f"Новостной кэш {source} не содержит {sorted(required.difference(news.columns))}"
+        )
     columns = ["period", "news_shock_score"]
-    columns.extend(column for column in ("sentiment_index", "news_volume") if column in news.columns)
+    columns.extend(
+        column for column in ("sentiment_index", "news_volume") if column in news.columns
+    )
     result = news.loc[:, columns].copy()
-    result["period"] = pd.to_datetime(result["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    result["period"] = (
+        pd.to_datetime(result["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    )
     if result["period"].duplicated().any():
         raise ValueError(f"Новостной кэш {source} содержит дубликаты месяцев")
     LOGGER.info("Новостные признаки загружены: %s, месяцев=%d", source, len(result))
@@ -141,8 +157,13 @@ def _monthly_news_validation(
 ) -> dict[str, float | int]:
     """Сопоставляет новостной индекс t-1 с алертами и невязками месяца t."""
     required = {
-        "period", config.entity_column, "news_shock_score", "residual",
-        "pelt_shock", "cusum_shock", "residual_shock",
+        "period",
+        config.entity_column,
+        "news_shock_score",
+        "residual",
+        "pelt_shock",
+        "cusum_shock",
+        "residual_shock",
     }
     if not required.issubset(detected.columns):
         return {
@@ -155,7 +176,9 @@ def _monthly_news_validation(
             "news_validated_events": 0,
         }
     local = detected.loc[~detected[config.entity_column].astype(str).eq("__national__")].copy()
-    local["period"] = pd.to_datetime(local["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    local["period"] = (
+        pd.to_datetime(local["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    )
     local["absolute_residual"] = pd.to_numeric(local["residual"], errors="coerce").abs()
     shares = (
         local.groupby("period", observed=True)[["pelt_shock", "cusum_shock", "residual_shock"]]
@@ -163,11 +186,16 @@ def _monthly_news_validation(
         .max(axis=1)
         .rename("alert_share")
     )
-    monthly = local.groupby("period", observed=True).agg(
-        residual_magnitude=("absolute_residual", "mean"),
-        news_shock_score=("news_shock_score", "median"),
-    ).join(shares).sort_index()
-    # NOTE: shift(1) не даёт новостям месяца разлома выдать себя за ранний сигнал.
+    monthly = (
+        local.groupby("period", observed=True)
+        .agg(
+            residual_magnitude=("absolute_residual", "mean"),
+            news_shock_score=("news_shock_score", "median"),
+        )
+        .join(shares)
+        .sort_index()
+    )
+    # Shift(1) не даёт новостям месяца разлома выдать себя за ранний сигнал.
     monthly["news_lead_score"] = _absolute_signal(monthly["news_shock_score"]).shift(1)
     comparable = monthly.dropna(subset=["news_lead_score", "alert_share", "residual_magnitude"])
     if comparable.empty:
@@ -186,7 +214,9 @@ def _monthly_news_validation(
     union = int((news_peaks | local_breaks).sum())
     validated = int((news_peaks & local_breaks).sum())
     correlation_alerts = _safe_correlation(comparable["news_lead_score"], comparable["alert_share"])
-    correlation_residuals = _safe_correlation(comparable["news_lead_score"], comparable["residual_magnitude"])
+    correlation_residuals = _safe_correlation(
+        comparable["news_lead_score"], comparable["residual_magnitude"]
+    )
     return {
         "jaccard": float(validated / union) if union else 0.0,
         "correlation": correlation_residuals,
@@ -203,7 +233,11 @@ def _lag_to_news(frame: pd.DataFrame, method: str, config: DetectionConfig) -> l
     news = frame.loc[frame.news_alert.eq(1), "period"].tolist() if "news_alert" in frame else []
     lags: list[int] = []
     for date in dates:
-        prior = [int((date.to_period("M") - value.to_period("M")).n) for value in news if value <= date and value >= date - pd.offsets.MonthBegin(config.event_tolerance)]
+        prior = [
+            int((date.to_period("M") - value.to_period("M")).n)
+            for value in news
+            if value <= date and value >= date - pd.offsets.MonthBegin(config.event_tolerance)
+        ]
         if prior:
             lags.append(min(prior))
     return lags
@@ -219,7 +253,9 @@ def _detected_dates(detected: pd.DataFrame, method: str) -> pd.DatetimeIndex:
     if column is None:
         return pd.DatetimeIndex([])
     mask = detected[column].fillna(False).astype(bool)
-    periods = pd.to_datetime(pd.Series(detected.loc[mask, "period"], copy=True), errors="coerce").dropna()
+    periods = pd.to_datetime(
+        pd.Series(detected.loc[mask, "period"], copy=True), errors="coerce"
+    ).dropna()
     month_starts = periods.dt.to_period("M").dt.to_timestamp()
     return pd.DatetimeIndex(month_starts.unique()).sort_values()
 
@@ -240,7 +276,9 @@ def validate_against_reference_events(
     catalogs = {"legacy": REFERENCE_EVENTS, "extended": EXTENDED_REFERENCE_EVENTS}
     if event_catalog not in catalogs:
         raise ValueError(f"Неизвестный каталог событий: {event_catalog}")
-    events = pd.DatetimeIndex(pd.Series(list(catalogs[event_catalog])).dt.to_period("M").dt.to_timestamp())
+    events = pd.DatetimeIndex(
+        pd.Series(list(catalogs[event_catalog])).dt.to_period("M").dt.to_timestamp()
+    )
     catalog_count = len(events)
     if restrict_to_observed and not detected.empty:
         observed = pd.to_datetime(detected["period"], utc=True).dt.tz_localize(None)
@@ -267,28 +305,47 @@ def validate_against_reference_events(
         precision = true_positives / len(predictions) if len(predictions) else 0.0
         recall = true_positives / len(events) if len(events) else 0.0
         f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
-        rows.append({
-            "method": method.upper() if method in {"tda", "cusum"} else method.capitalize(),
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-            "mean_lead_time_days": float(np.mean(leads)) if leads else np.nan,
-            "coverage_pct": recall * 100.0,
-            "true_positives": true_positives,
-            "reference_events": len(events),
-            "detected_events": len(predictions),
-            "mean_detection_delay_days": float(np.mean([max(value, 0) for value in leads])) if leads else np.nan,
-            "detection_delay_months": float(np.mean([max(value, 0) for value in leads]) / 30.4375) if leads else np.nan,
-            "event_catalog": event_catalog,
-            "catalog_events": catalog_count,
-            "out_of_range_events": catalog_count - len(events),
-        })
+        rows.append(
+            {
+                "method": method.upper() if method in {"tda", "cusum"} else method.capitalize(),
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "mean_lead_time_days": float(np.mean(leads)) if leads else np.nan,
+                "coverage_pct": recall * 100.0,
+                "true_positives": true_positives,
+                "reference_events": len(events),
+                "detected_events": len(predictions),
+                "mean_detection_delay_days": float(np.mean([max(value, 0) for value in leads]))
+                if leads
+                else np.nan,
+                "detection_delay_months": float(
+                    np.mean([max(value, 0) for value in leads]) / 30.4375
+                )
+                if leads
+                else np.nan,
+                "event_catalog": event_catalog,
+                "catalog_events": catalog_count,
+                "out_of_range_events": catalog_count - len(events),
+            }
+        )
     return pd.DataFrame(
         rows,
         columns=[
-            "method", "precision", "recall", "f1", "mean_lead_time_days",
-            "coverage_pct", "true_positives", "reference_events", "detected_events",
-            "mean_detection_delay_days", "detection_delay_months", "event_catalog", "catalog_events", "out_of_range_events",
+            "method",
+            "precision",
+            "recall",
+            "f1",
+            "mean_lead_time_days",
+            "coverage_pct",
+            "true_positives",
+            "reference_events",
+            "detected_events",
+            "mean_detection_delay_days",
+            "detection_delay_months",
+            "event_catalog",
+            "catalog_events",
+            "out_of_range_events",
         ],
     )
 
@@ -299,7 +356,9 @@ def export_changepoint_validation(
     *,
     event_catalog: str = "legacy",
 ) -> pd.DataFrame:
-    validation = validate_against_reference_events(detected, event_catalog=event_catalog, restrict_to_observed=True)
+    validation = validate_against_reference_events(
+        detected, event_catalog=event_catalog, restrict_to_observed=True
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     validation.to_csv(output, index=False, encoding="utf-8", lineterminator="\n")
     LOGGER.info("Экономическая валидация сохранена: %s", output)
@@ -321,12 +380,21 @@ def _split_contiguous_monthly_runs(frame: pd.DataFrame) -> list[pd.DataFrame]:
 
 def _resolve_oof_columns(frame: pd.DataFrame, config: DetectionConfig) -> tuple[str, str]:
     actual_candidates = tuple(dict.fromkeys((config.actual_column, "target", "y")))
-    aliases = {"catboost_prediction": ("pred_catboost",), "ensemble_prediction": ("pred_ensemble",), "prophet_prediction": ("pred_prophet",), "chronos_prediction": ("pred_chronos",)}
-    prediction_candidates = tuple(dict.fromkeys((config.prediction_column, *aliases.get(config.prediction_column, ()))))
+    aliases = {
+        "catboost_prediction": ("pred_catboost",),
+        "ensemble_prediction": ("pred_ensemble",),
+        "prophet_prediction": ("pred_prophet",),
+        "chronos_prediction": ("pred_chronos",),
+    }
+    prediction_candidates = tuple(
+        dict.fromkeys((config.prediction_column, *aliases.get(config.prediction_column, ())))
+    )
     actual = next((column for column in actual_candidates if column in frame), None)
     prediction = next((column for column in prediction_candidates if column in frame), None)
     if actual is None or prediction is None:
-        raise ValueError(f"OOF не содержит цель/прогноз: actual={actual_candidates}, prediction={prediction_candidates}")
+        raise ValueError(
+            f"OOF не содержит цель/прогноз: actual={actual_candidates}, prediction={prediction_candidates}"
+        )
     return actual, prediction
 
 
@@ -344,19 +412,33 @@ def _load_national_history(config: DetectionConfig) -> pd.DataFrame | None:
     available: set[str] = set()
     for chunk in chunks:
         if not required.issubset(chunk.columns):
-            raise ValueError(f"National history не содержит {sorted(required.difference(chunk.columns))}")
+            raise ValueError(
+                f"National history не содержит {sorted(required.difference(chunk.columns))}"
+            )
         available.update(chunk[config.national_category_column].dropna().astype(str).unique())
-        part = chunk.loc[chunk[config.national_category_column].eq(config.national_category), ["period", "value"]]
+        part = chunk.loc[
+            chunk[config.national_category_column].eq(config.national_category), ["period", "value"]
+        ]
         if not part.empty:
             selected_parts.append(part)
     if not selected_parts:
-        raise ValueError(f"Категория {config.national_category!r} не найдена; доступны {sorted(available)}")
+        raise ValueError(
+            f"Категория {config.national_category!r} не найдена; доступны {sorted(available)}"
+        )
     selected = pd.concat(selected_parts, ignore_index=True)
-    selected["period"] = pd.to_datetime(selected["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    selected["period"] = (
+        pd.to_datetime(selected["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    )
     selected["value"] = pd.to_numeric(selected["value"], errors="raise")
     national = pd.DataFrame(selected.groupby("period", observed=True)["value"].mean()).reset_index()
-    national = national.rename(columns={"value": "y"}).sort_values("period", kind="stable").reset_index(drop=True)
-    national["prediction"] = national["y"].shift(1).rolling(3, min_periods=1).mean().fillna(national["y"])
+    national = (
+        national.rename(columns={"value": "y"})
+        .sort_values("period", kind="stable")
+        .reset_index(drop=True)
+    )
+    national["prediction"] = (
+        national["y"].shift(1).rolling(3, min_periods=1).mean().fillna(national["y"])
+    )
     national[config.entity_column] = "__national__"
     return national
 
@@ -367,7 +449,9 @@ def _append_national_detection(output: pd.DataFrame, config: DetectionConfig) ->
         return output
     detected = detect_changepoints(national, config)
     try:
-        tda = TopologicalAnalyzer(TDAConfig(window_size=5, embedding_dimension=3, time_delay=1)).fit_transform(
+        tda = TopologicalAnalyzer(
+            TDAConfig(window_size=5, embedding_dimension=3, time_delay=1)
+        ).fit_transform(
             national.set_index("period")["y"],
         )
         detected = detected.merge(tda, on="period", how="left", validate="one_to_one")
@@ -378,7 +462,9 @@ def _append_national_detection(output: pd.DataFrame, config: DetectionConfig) ->
     return pd.concat([output, detected], ignore_index=True, sort=False)
 
 
-def _append_territorial_residual_evidence(detected: pd.DataFrame, config: DetectionConfig) -> pd.DataFrame:
+def _append_territorial_residual_evidence(
+    detected: pd.DataFrame, config: DetectionConfig
+) -> pd.DataFrame:
     """Добавляет в fallback причинные residual-алерты всех МО для макроагрегации."""
     if config.national_history is None:
         return detected
@@ -389,14 +475,22 @@ def _append_territorial_residual_evidence(detected: pd.DataFrame, config: Detect
     required = {"period", "mo", "value", config.national_category_column}
     if not required.issubset(raw.columns):
         return detected
-    local = raw.loc[raw[config.national_category_column].eq(config.national_category), ["period", "mo", "value"]].copy()
-    local["period"] = pd.to_datetime(local["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    local = raw.loc[
+        raw[config.national_category_column].eq(config.national_category), ["period", "mo", "value"]
+    ].copy()
+    local["period"] = (
+        pd.to_datetime(local["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    )
     local["y"] = pd.to_numeric(local.pop("value"), errors="raise")
     local = local.sort_values(["mo", "period"], kind="stable")
     local["prediction"] = local.groupby("mo", observed=True)["y"].shift(1)
     local["residual"] = (local["y"] - local["prediction"]).abs()
     local["residual_threshold"] = local.groupby("mo", observed=True)["residual"].transform(
-        lambda values: values.shift(1).rolling(config.window, min_periods=config.min_history).quantile(config.residual_quantile),
+        lambda values: (
+            values.shift(1)
+            .rolling(config.window, min_periods=config.min_history)
+            .quantile(config.residual_quantile)
+        ),
     )
     local["residual_eligible"] = local["residual_threshold"].notna()
     local["residual_shock"] = (
@@ -440,18 +534,28 @@ def _continuous_news_correlations(
         targets["national_spending_growth_mom"] = values.pct_change(fill_method=None)
     rows: list[dict[str, Any]] = []
     for name, series in targets.items():
-        paired = pd.concat([monthly.rename("news"), series.rename("outcome")], axis=1).replace(
-            [np.inf, -np.inf], np.nan,
-        ).dropna()
-        variable_pair = len(paired) > 1 and paired.news.nunique() > 1 and paired.outcome.nunique() > 1
-        rows.append({
-            "method": "news_lead_t-1",
-            "other": name,
-            "correlation": float(paired.news.corr(paired.outcome)) if variable_pair else np.nan,
-            "spearman_correlation": float(paired.news.corr(paired.outcome, method="spearman"))
-            if variable_pair else np.nan,
-            "n_comparable": len(paired),
-        })
+        paired = (
+            pd.concat([monthly.rename("news"), series.rename("outcome")], axis=1)
+            .replace(
+                [np.inf, -np.inf],
+                np.nan,
+            )
+            .dropna()
+        )
+        variable_pair = (
+            len(paired) > 1 and paired.news.nunique() > 1 and paired.outcome.nunique() > 1
+        )
+        rows.append(
+            {
+                "method": "news_lead_t-1",
+                "other": name,
+                "correlation": float(paired.news.corr(paired.outcome)) if variable_pair else np.nan,
+                "spearman_correlation": float(paired.news.corr(paired.outcome, method="spearman"))
+                if variable_pair
+                else np.nan,
+                "n_comparable": len(paired),
+            }
+        )
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -463,7 +567,8 @@ def _add_consensus(detected: pd.DataFrame) -> pd.DataFrame:
         key = f"{method}_macro_shock"
         active = (
             detected.loc[detected[key].fillna(False).astype(bool), "period"]
-            if key in detected else pd.Series(dtype="datetime64[ns]")
+            if key in detected
+            else pd.Series(dtype="datetime64[ns]")
         )
         monthly[f"{method}_shock"] = monthly.period.isin(active)
     # news_alert относится к месяцу, в который лагированный индекс уже доступен.
@@ -477,7 +582,9 @@ def _add_consensus(detected: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def evaluate(frame: pd.DataFrame, config: DetectionConfig) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+def evaluate(
+    frame: pd.DataFrame, config: DetectionConfig
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     required = {config.entity_column, config.period_column}
     if not required.issubset(frame.columns):
         raise ValueError(f"OOF не содержит колонки: {sorted(required.difference(frame.columns))}")
@@ -485,12 +592,22 @@ def evaluate(frame: pd.DataFrame, config: DetectionConfig) -> tuple[pd.DataFrame
     records: list[pd.DataFrame] = []
     split_entities = 0
     for entity, group in frame.groupby(config.entity_column, sort=True, observed=True):
-        current = group.rename(columns={prediction_column: "prediction", config.period_column: "period", actual_column: "y"})
+        current = group.rename(
+            columns={
+                prediction_column: "prediction",
+                config.period_column: "period",
+                actual_column: "y",
+            }
+        )
         runs = _split_contiguous_monthly_runs(current)
         split_entities += int(len(runs) > 1)
         for run in runs:
             detected = detect_changepoints(run, config)
-            detected["detected_at"] = pd.to_datetime(detected[config.availability_column]) if config.availability_column in detected else detected.period + pd.offsets.MonthBegin(1)
+            detected["detected_at"] = (
+                pd.to_datetime(detected[config.availability_column])
+                if config.availability_column in detected
+                else detected.period + pd.offsets.MonthBegin(1)
+            )
             detected[config.entity_column] = entity
             records.append(detected)
     if not records:
@@ -500,12 +617,16 @@ def evaluate(frame: pd.DataFrame, config: DetectionConfig) -> tuple[pd.DataFrame
     if national_mask.any() and "tda_wasserstein_dist" not in output.columns:
         try:
             national_group = output.loc[national_mask].sort_values("period", kind="stable")
-            tda = TopologicalAnalyzer(TDAConfig(window_size=5, embedding_dimension=3, time_delay=1)).fit_transform(
+            tda = TopologicalAnalyzer(
+                TDAConfig(window_size=5, embedding_dimension=3, time_delay=1)
+            ).fit_transform(
                 national_group.set_index("period")["y"],
             )
             tda_by_period = tda.set_index("period")
             for column in ("tda_entropy", "tda_wasserstein_dist"):
-                output.loc[national_mask, column] = output.loc[national_mask, "period"].map(tda_by_period[column])
+                output.loc[national_mask, column] = output.loc[national_mask, "period"].map(
+                    tda_by_period[column]
+                )
         except (ImportError, ValueError, RuntimeError):
             LOGGER.warning("TDA OOF national-ряда недоступен", exc_info=True)
     output = _append_national_detection(output, config)
@@ -521,8 +642,21 @@ def evaluate(frame: pd.DataFrame, config: DetectionConfig) -> tuple[pd.DataFrame
         for other in METHODS:
             if method < other:
                 eligible = output[method + "_eligible"] & output[other + "_eligible"]
-                left, right = output.loc[eligible, method + "_shock"], output.loc[eligible, other + "_shock"]
-                rows.append({"method": method, "other": other, "jaccard": _jaccard(left, right) if len(left) else np.nan, "correlation": float(left.corr(right)) if left.nunique() > 1 and right.nunique() > 1 else np.nan, "n_comparable": len(left)})
+                left, right = (
+                    output.loc[eligible, method + "_shock"],
+                    output.loc[eligible, other + "_shock"],
+                )
+                rows.append(
+                    {
+                        "method": method,
+                        "other": other,
+                        "jaccard": _jaccard(left, right) if len(left) else np.nan,
+                        "correlation": float(left.corr(right))
+                        if left.nunique() > 1 and right.nunique() > 1
+                        else np.nan,
+                        "n_comparable": len(left),
+                    }
+                )
         lags: list[int] = []
         for _, group in output.groupby(config.entity_column, observed=True):
             lags.extend(_lag_to_news(group, method, config))
@@ -537,7 +671,14 @@ def evaluate(frame: pd.DataFrame, config: DetectionConfig) -> tuple[pd.DataFrame
             summary_row.update(news_validation)
             summary_row["other"] = "news_lead_t-1"
         rows.append(summary_row)
-    summary: dict[str, Any] = {"entities": int(output[config.entity_column].nunique()), "rows": len(output), "methods": list(METHODS), "split_entities": split_entities, "macro_alert_share": config.macro_alert_share, "interpretation": "Метрики согласованности описательные; экономическая проверка использует фиксированные события ДКП."}
+    summary: dict[str, Any] = {
+        "entities": int(output[config.entity_column].nunique()),
+        "rows": len(output),
+        "methods": list(METHODS),
+        "split_entities": split_entities,
+        "macro_alert_share": config.macro_alert_share,
+        "interpretation": "Метрики согласованности описательные; экономическая проверка использует фиксированные события ДКП.",
+    }
     return output, pd.DataFrame(rows), summary
 
 
@@ -549,7 +690,7 @@ def run_benchmark(config: DetectionConfig) -> dict[str, Any]:
         if "lead_months" in frame:
             frame = frame.loc[frame["lead_months"].eq(1)].copy()
     else:
-        # NOTE: без OOF считаем честный rolling baseline, модели заново не обучаем.
+        # Без OOF считаем честный rolling baseline, модели заново не обучаем.
         national = _load_national_history(config)
         if national is None:
             raise FileNotFoundError(f"Нет OOF-файла и national history: {source}")
@@ -566,7 +707,9 @@ def run_benchmark(config: DetectionConfig) -> dict[str, Any]:
         frame = frame.merge(news, on="period", how="left", validate="many_to_one")
     detected, metrics, summary = evaluate(frame, config)
     summary["event_catalog"] = config.event_catalog
-    summary["reference_events"] = len(EXTENDED_REFERENCE_EVENTS if config.event_catalog == "extended" else REFERENCE_EVENTS)
+    summary["reference_events"] = len(
+        EXTENDED_REFERENCE_EVENTS if config.event_catalog == "extended" else REFERENCE_EVENTS
+    )
     summary["detection_metrics"] = ["precision", "recall", "f1", "detection_delay_months"]
     if not source.exists():
         detected = _append_territorial_residual_evidence(detected, original_config)
@@ -587,7 +730,9 @@ def run_benchmark(config: DetectionConfig) -> dict[str, Any]:
     try:
         national = _load_national_history(config)
         benchmark_frame = national if national is not None else frame
-        algorithm_metrics = benchmark_offline_algorithms(benchmark_frame, config, event_catalog=config.event_catalog)
+        algorithm_metrics = benchmark_offline_algorithms(
+            benchmark_frame, config, event_catalog=config.event_catalog
+        )
         algorithm_path = output.parent / "artifacts" / "changepoint_algorithm_benchmark.csv"
         algorithm_path.parent.mkdir(parents=True, exist_ok=True)
         algorithm_metrics.to_csv(algorithm_path, index=False, encoding="utf-8")
@@ -595,7 +740,9 @@ def run_benchmark(config: DetectionConfig) -> dict[str, Any]:
         LOGGER.warning("Сравнение cost-функций CPD пропущено: %s", error)
     validation_path = output.parent / "artifacts" / "changepoint_validation.csv"
     export_changepoint_validation(detected, validation_path, event_catalog=config.event_catalog)
-    output.with_suffix(".summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    output.with_suffix(".summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     for number, (entity, group) in enumerate(detected.groupby(config.entity_column, observed=True)):
         if number >= config.max_figures:
             break

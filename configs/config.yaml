@@ -1,6 +1,7 @@
 paths:
   supervised: data/processed/supervised.parquet
   artifacts: reports/artifacts
+  submission_roster: configs/submission_roster.csv
 validation:
   # Каждая дата h строится отдельным direct-panel с frozen origin.
   # При недостатке истории сохраняется явный статус not_evaluated.
@@ -50,6 +51,12 @@ ensemble:
   metric_to_optimize: MAE
   alpha_bounds: [0.5, 1.0]
   default_alpha: 0.82
+  prophet_weight: 0.35
+  catboost_weight: 0.45
+  chronos_weight: 0.20
+  long_horizon_catboost_weight: 0.75
+  # OOF-калиброванные веса горизонтов; применяются и к OOF, и к сабмиту.
+  weights_path: configs/candidate_oof_optimum.json
 models:
   # Chronos-Bolt is measured in the default offline run. MOIRAI is not
   # claimed until a pinned uni2ts checkpoint and adapter are supplied.
@@ -172,7 +179,7 @@ data:
     tags: [Экономика, Финансы, Бизнес]
     # Обученная sentiment-модель; базовый rubert-tiny2 не классификатор.
     model_id: cointegrated/rubert-tiny-sentiment-balanced
-    revision: main
+    revision: e0679dd4460e48648f5d4d819ae0f505384f5a9d
     device: auto
     mixed_precision: false
     fallback_to_cpu_on_oom: true
@@ -189,10 +196,8 @@ data:
       - datasets/RBK.json
     news_auto_discover: true
     news_timezone: Europe/Moscow
-    # true — sentiment-модель; false — быстрый деградированный режим volume/shock.
-    # The available cache has no measured sentiment. The default run uses
-    # reproducible archive volume/shock signals and does not claim RuBERT scores.
-    news_sentiment_enabled: false
+    # Обученная модель измеряет sentiment; при ошибке расчёт останавливается.
+    news_sentiment_enabled: true
     news_strip_html: true
     news_remove_urls: true
     news_deduplicate: true
@@ -245,3 +250,19 @@ changepoint_detection:
   event_tolerance: 3
   max_figures: 5
   event_catalog: extended
+
+# Политика памяти для полного переобучения с нуля (--retrain-from-scratch).
+# Значения по умолчанию воспроизводят прежнее поведение пайплайна.
+memory:
+  safe_mode: false
+  downcast_features: false
+  prophet_batch_size: 128
+  prophet_spill_dir: tmp/prophet_batches
+  chronos_batch_size: 128
+  # null => reproducibility.threads (детерминизм); CatBoost RAM почти не зависит
+  # от thread_count, а рост потоков её увеличивает.
+  catboost_thread_count: null
+  # 254 (uint8-квантизация) уже минимально возможный размер гистограмм;
+  # снижение до 128 меняет модель, не экономя память.
+  catboost_border_count: 254
+  gc_every_batch: true

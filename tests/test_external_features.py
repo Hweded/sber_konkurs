@@ -364,6 +364,66 @@ def test_json_news_features_are_lagged_without_future_leakage(tmp_path: Path, mo
     assert result.loc["2024-02-01", "telegram_volume"] == np.log1p(1)
 
 
+def test_enabled_json_sentiment_fails_instead_of_silent_fallback(tmp_path: Path, monkeypatch: Any) -> None:
+    import json
+
+    from src.data_config import NLPConfig
+    from src.nlp_features import NewsFeatureExtractor
+
+    source = tmp_path / "news.json"
+    source.write_text(
+        json.dumps([{"date": "2024-01-10", "text": "Инфляция и цены выросли достаточно сильно"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    config = NLPConfig(
+        news_json_paths=(source,),
+        telegram_keywords=("инфляция",),
+        telegram_min_length=10,
+        news_sentiment_enabled=True,
+        cache=tmp_path / "cache.parquet",
+        path=tmp_path / "unused.csv",
+    )
+    extractor = NewsFeatureExtractor(config)
+
+    def fail_model() -> None:
+        raise OSError("model unavailable")
+
+    monkeypatch.setattr(extractor, "_get_scorer", fail_model)
+    with pytest.raises(RuntimeError, match="sentiment не удалось измерить"):
+        extractor.compute_nlp_features(force=True)
+    assert not (tmp_path / "news_features.parquet").exists()
+
+
+def test_json_news_cache_shared_by_relative_and_absolute_paths(tmp_path: Path, monkeypatch: Any) -> None:
+    import json
+
+    from src.data_config import NLPConfig
+    from src.nlp_features import NewsFeatureExtractor
+
+    source = tmp_path / "news.json"
+    source.write_text(
+        json.dumps([{"date": "2024-01-10", "text": "Инфляция и цены выросли достаточно сильно"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    config = NLPConfig(
+        news_json_paths=(source,),
+        telegram_keywords=("инфляция",),
+        telegram_min_length=10,
+        cache=Path("cache.parquet"),
+        path=Path("unused.csv"),
+    )
+    first = NewsFeatureExtractor(config, project_root=tmp_path)
+    monkeypatch.setattr(first, "_get_scorer", lambda: True)
+    monkeypatch.setattr(first, "_score_batch", lambda texts: np.ones(len(texts)))
+    first.compute_nlp_features()
+
+    absolute = config.model_copy(update={"cache": tmp_path / config.cache, "path": tmp_path / config.path})
+    second = NewsFeatureExtractor(absolute, project_root=tmp_path)
+    monkeypatch.setattr(second, "_get_scorer", lambda: pytest.fail("cache miss"))
+    cached = second.compute_nlp_features()
+    assert cached["telegram_sentiment"].notna().sum() == 1
+
+
 def test_json_news_corrupt_and_empty_inputs_degrade_gracefully(tmp_path: Path) -> None:
     """Повреждённый, пустой и отсутствующий источники не останавливают ETL."""
     from src.data_config import NLPConfig

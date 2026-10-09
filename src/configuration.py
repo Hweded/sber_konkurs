@@ -1,4 +1,5 @@
 """Загрузка YAML и проверка связности настроек."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,6 +22,7 @@ class StrictConfig(BaseModel):
 class PathsConfig(StrictConfig):
     supervised: Path
     artifacts: Path
+    submission_roster: Path = Path("configs/submission_roster.csv")
 
 
 class ReproducibilityConfig(StrictConfig):
@@ -63,6 +65,24 @@ class OptimizationConfig(StrictConfig):
     objective: Literal["MAE"]
 
 
+class MemoryConfig(StrictConfig):
+    """Политика памяти для полного переобучения на хосте с 14.7 GiB RAM.
+
+    Значения по умолчанию воспроизводят прежнее поведение.  Флаг
+    ``--retrain-from-scratch`` переключает ``safe_mode`` и включает
+    даункастинг, мини-батчи Prophet и очистку буферов.
+    """
+
+    safe_mode: bool = False
+    downcast_features: bool = False
+    prophet_batch_size: int = Field(default=128, gt=0)
+    prophet_spill_dir: Path = Path("tmp/prophet_batches")
+    chronos_batch_size: int | None = Field(default=None, gt=0)
+    catboost_thread_count: int | None = Field(default=None, gt=0)
+    catboost_border_count: int = Field(default=254, ge=2)
+    gc_every_batch: bool = True
+
+
 class AppConfig(StrictConfig):
     device: DeviceConfig = Field(default_factory=DeviceConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
@@ -76,6 +96,7 @@ class AppConfig(StrictConfig):
 
     changepoint_detection: DetectionConfig = Field(default_factory=DetectionConfig)
     tda: TDAConfig = Field(default_factory=TDAConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     @model_validator(mode="after")
     def check_horizon(self) -> AppConfig:

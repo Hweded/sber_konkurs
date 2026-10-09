@@ -12,6 +12,38 @@ from src.data_loader import discover_file, load_macro
 from src.nlp_features import JSON_TO_NEWS_COLUMNS
 
 
+def test_bundled_roster_works_without_existing_submission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.forecasting import load_submission_roster
+
+    config = load_config(Path("configs/config.yaml"))
+    config = config.model_copy(update={
+        "paths": config.paths.model_copy(update={
+            "submission_roster": config.paths.submission_roster.resolve(),
+            "artifacts": tmp_path / "artifacts",
+        }),
+    })
+    monkeypatch.chdir(tmp_path)
+    roster, source = load_submission_roster(config)
+
+    assert source == config.paths.submission_roster
+    assert len(roster) == len(set(roster)) == 2_094
+    assert not (tmp_path / "submission.csv").exists()
+
+
+def test_roster_rejects_incomplete_competition_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.forecasting import load_submission_roster
+
+    path = tmp_path / "roster.csv"
+    pd.DataFrame({"mo": ["a", "b"]}).to_csv(path, index=False)
+    config = load_config(Path("configs/config.yaml"))
+    config = config.model_copy(update={
+        "paths": config.paths.model_copy(update={"submission_roster": path, "artifacts": tmp_path}),
+    })
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="2094 уникальных МО"):
+        load_submission_roster(config)
+
+
 @pytest.fixture(scope="module")
 def submission() -> pd.DataFrame:
     return pd.read_csv(Path("submission.csv"))
@@ -42,6 +74,8 @@ def test_point_in_time_leakage() -> None:
     assert config.data.macro_lag_months >= 1
     assert config.data.nlp.lag_months >= 1
     assert config.features.news_lag_months >= 1
+    if not Path(config.paths.supervised).exists():
+        pytest.skip("production feature cache is not present in the clean repository")
     panel = pd.read_parquet(config.paths.supervised)
     macros = [str(column) for column in panel if str(column).startswith("macro_")]
     assert macros and all(column.endswith("_lag_1") for column in macros)
@@ -77,13 +111,13 @@ def test_changed_candidate_synchronizes_submission(tmp_path: Path) -> None:
     root = tmp_path / "submission.csv"
     candidate = tmp_path / "reports" / "submission.csv"
     periods = pd.date_range("2024-07-01", periods=2, freq="MS")
-    initial = pd.DataFrame({"mo": ["a", "a"], "period": periods, "pred_catboost": [10.0, 20.0]})
+    initial = pd.DataFrame({"mo": ["a", "a"], "period": periods, "pred_regime_aware": [10.0, 20.0]})
     validator = SubmissionValidator(candidate, root)
     validator.build(initial, expected_rows=2, expected_entities=1, periods=periods)
     digest = hashlib.md5(root.read_bytes()).hexdigest()
 
     changed = initial.copy()
-    changed["pred_catboost"] = [11.0, 21.0]
+    changed["pred_regime_aware"] = [11.0, 21.0]
     output = validator.build(changed, expected_rows=2, expected_entities=1, periods=periods)
     assert output["pred"].tolist() == [11.0, 21.0]
     assert pd.read_csv(candidate)["pred"].tolist() == [11.0, 21.0]
@@ -97,29 +131,43 @@ def test_changed_candidate_updates_same_path(tmp_path: Path) -> None:
     root = tmp_path / "submission.csv"
     periods = pd.date_range("2024-07-01", periods=1, freq="MS")
     validator = SubmissionValidator(root, root)
-    frame = pd.DataFrame({"mo": ["a"], "period": periods, "pred_catboost": [10.0]})
+    frame = pd.DataFrame({"mo": ["a"], "period": periods, "pred_regime_aware": [10.0]})
     validator.build(frame, expected_rows=1, expected_entities=1, periods=periods)
-    frame["pred_catboost"] = [11.0]
+    frame["pred_regime_aware"] = [11.0]
     validator.build(frame, expected_rows=1, expected_entities=1, periods=periods)
     assert pd.read_csv(root)["pred"].tolist() == [11.0]
 
 
-def test_explicit_prophet_selection_writes_identical_outputs(tmp_path: Path) -> None:
+def test_missing_requested_column_is_rejected(tmp_path: Path) -> None:
     from src.submission import SubmissionValidator
 
     periods = pd.date_range("2024-07-01", periods=2, freq="MS")
-    frame = pd.DataFrame({
-        "mo": ["a", "a"], "period": periods,
-        "pred_catboost": [10.0, 11.0], "pred_prophet": [20.0, 21.0],
-    })
+    frame = pd.DataFrame({"mo": ["a", "a"], "period": periods, "pred_prophet": [20.0, 21.0]})
     root = tmp_path / "submission.csv"
     candidate = tmp_path / "reports" / "submission.csv"
-    result = SubmissionValidator(candidate, root).build(
-        frame, expected_rows=2, expected_entities=1, periods=periods,
-        prediction_column="pred_prophet",
-    )
-    assert result.pred.tolist() == [20.0, 21.0]
-    assert root.read_bytes() == candidate.read_bytes()
+    with pytest.raises(KeyError, match="Скрытый фоллбэк запрещён"):
+        SubmissionValidator(candidate, root).build(
+            frame, expected_rows=2, expected_entities=1, periods=periods,
+            prediction_column="pred_regime_aware",
+        )
+    with pytest.raises(KeyError, match="pred_regime_aware"):
+        SubmissionValidator(candidate, root).build(
+            frame, expected_rows=2, expected_entities=1, periods=periods,
+        )
+    assert not root.exists()
+    assert not candidate.exists()
+
+
+def test_regime_aware_rejects_missing_grid_rows(tmp_path: Path) -> None:
+    from src.submission import SubmissionValidator
+
+    periods = pd.date_range("2024-07-01", periods=2, freq="MS")
+    frame = pd.DataFrame({"mo": ["a"], "period": periods[:1], "pred_regime_aware": [10.0]})
+    with pytest.raises(ValueError, match="отсутствуют 1 прогнозов pred_regime_aware"):
+        SubmissionValidator(tmp_path / "candidate.csv", tmp_path / "root.csv").build(
+            frame, expected_rows=2, expected_entities=1, periods=periods,
+        )
+    assert not (tmp_path / "candidate.csv").exists()
 
 
 def test_partial_oof_uses_fixed_roster_and_only_past_history(tmp_path: Path) -> None:
@@ -139,7 +187,7 @@ def test_partial_oof_uses_fixed_roster_and_only_past_history(tmp_path: Path) -> 
 
     result = SubmissionValidator(tmp_path / "candidate.csv", root).build(
         predictions, expected_rows=4, expected_entities=2,
-        periods=periods.tz_localize(None), history=history,
+        periods=periods.tz_localize(None), history=history, prediction_column="pred_catboost",
     )
 
     assert result["mo"].tolist() == ["a", "a", "b", "b"]
@@ -161,7 +209,7 @@ def test_explicit_roster_supports_cold_start_without_future_history(tmp_path: Pa
 
     result = SubmissionValidator(tmp_path / "candidate.csv", tmp_path / "root.csv").build(
         predictions, expected_rows=2, expected_entities=2, periods=periods,
-        entity_universe=["a", "b"], history=history,
+        entity_universe=["a", "b"], history=history, prediction_column="pred_catboost",
     )
 
     assert result["pred"].tolist() == [30.0, 15.0]
@@ -176,7 +224,7 @@ def test_submission_rejects_entities_outside_reference_roster(tmp_path: Path) ->
     with pytest.raises(ValueError, match="вне списка submission"):
         SubmissionValidator(tmp_path / "candidate.csv", tmp_path / "root.csv").build(
             predictions, expected_rows=1, expected_entities=1, periods=periods,
-            entity_universe=["a"],
+            entity_universe=["a"], prediction_column="pred_catboost",
         )
 
 
@@ -187,7 +235,7 @@ def test_submission_keeps_count_check_without_reference_roster(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="Ожидалось 2 уникальных МО"):
         SubmissionValidator(tmp_path / "candidate.csv", tmp_path / "root.csv").build(
-            predictions, expected_rows=12, expected_entities=2,
+            predictions, expected_rows=12, expected_entities=2, prediction_column="pred_catboost",
         )
 
 
@@ -201,5 +249,5 @@ def test_submission_fallback_rejects_history_available_only_in_future(tmp_path: 
     with pytest.raises(ValueError, match="Нет истории до"):
         SubmissionValidator(tmp_path / "candidate.csv", tmp_path / "root.csv").build(
             predictions, expected_rows=2, expected_entities=2, periods=periods,
-            entity_universe=["a", "b"], history=history,
+            entity_universe=["a", "b"], history=history, prediction_column="pred_catboost",
         )

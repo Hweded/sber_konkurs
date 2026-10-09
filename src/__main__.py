@@ -1,4 +1,5 @@
 """CLI: сборка месячной матрицы, проверка фолдов и табличная CV."""
+
 from __future__ import annotations
 
 import argparse
@@ -25,7 +26,9 @@ def resolve_path(path: Path) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check-config", "build-dataset", "validate", "cv-catboost"))
+    parser.add_argument(
+        "command", choices=("check-config", "build-dataset", "validate", "cv-catboost")
+    )
     parser.add_argument("--config", type=Path, default=Path("configs/config.yaml"))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -46,14 +49,37 @@ def main() -> int:
             LOGGER.info("Матрица %s сохранена: %s", frame.shape, output)
             return 0
         frame = pd.read_parquet(resolve_path(config.paths.supervised))
-        extra = sorted(column for column in frame.columns if column.startswith(("macro_", "rosstat_")) or column in ("news_sentiment", "news_shock_index", "sentiment_index", "news_volume", "news_shock_score"))
+        extra = sorted(
+            column
+            for column in frame.columns
+            if column.startswith(("macro_", "rosstat_"))
+            or column
+            in (
+                "news_sentiment",
+                "news_shock_index",
+                "sentiment_index",
+                "news_volume",
+                "news_shock_score",
+            )
+        )
         settings = config.validation.model_dump()
-        settings["feature_columns"] = tuple(dict.fromkeys([*config.validation.feature_columns, *extra]))
+        settings["feature_columns"] = tuple(
+            dict.fromkeys([*config.validation.feature_columns, *extra])
+        )
         validation = ValidationConfig.model_validate(settings)
         frame = to_validation_panel(frame, validation)
         if args.command == "validate":
             folds = expanding_window_splits(frame, validation)
-            print(json.dumps([fold.model_dump(exclude={"train_positions", "test_positions"}) | {"n_train": len(fold.train_positions), "n_test": len(fold.test_positions)} for fold in folds], indent=2))
+            print(
+                json.dumps(
+                    [
+                        fold.model_dump(exclude={"train_positions", "test_positions"})
+                        | {"n_train": len(fold.train_positions), "n_test": len(fold.test_positions)}
+                        for fold in folds
+                    ],
+                    indent=2,
+                )
+            )
             return 0
         if config.optimization.enabled:
             raise ValueError("Optuna не реализован на шаге 1; отключите optimization.enabled")
@@ -64,9 +90,13 @@ def main() -> int:
         report = cross_validate(frame, validation, CatBoostRegressor(**parameters))
         destination = resolve_path(config.paths.artifacts)
         destination.mkdir(parents=True, exist_ok=True)
-        (destination / "catboost_cv.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        (destination / "catboost_cv.json").write_text(
+            report.model_dump_json(indent=2), encoding="utf-8"
+        )
         resolved = config.model_copy(update={"validation": validation})
-        (destination / "config.resolved.json").write_text(resolved.model_dump_json(indent=2), encoding="utf-8")
+        (destination / "config.resolved.json").write_text(
+            resolved.model_dump_json(indent=2), encoding="utf-8"
+        )
         LOGGER.info("Отчёт записан в %s", destination)
         return 0
     except Exception:

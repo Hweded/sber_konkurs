@@ -1,4 +1,5 @@
 """Чтение UTF-8 выгрузок и склейка календарно лагированных макроданных."""
+
 from __future__ import annotations
 
 import csv
@@ -64,10 +65,14 @@ def read_source(path: Path, separator: str = ";") -> pd.DataFrame:
         frame = _read_csv_streaming(path, separator)
         required = {"period", "value", "obs_status", "freq", "unit_mult"}
         if not required.issubset(frame):
-            raise ValueError(f"{path.name}: нет колонок {sorted(required.difference(frame.columns))}")
+            raise ValueError(
+                f"{path.name}: нет колонок {sorted(required.difference(frame.columns))}"
+            )
         before = len(frame)
         frame = frame.loc[frame["obs_status"].eq("A")].copy()
-        frame["period"] = pd.to_datetime(frame["period"], format="%Y-%m-%d", errors="raise").astype("datetime64[ns]")
+        frame["period"] = pd.to_datetime(frame["period"], format="%Y-%m-%d", errors="raise").astype(
+            "datetime64[ns]"
+        )
         if frame["period"].isna().any() or frame.empty:
             raise ValueError(f"{path.name}: нет валидных дат/строк")
         for column in frame.select_dtypes(include=["object", "string"]).columns:
@@ -82,7 +87,13 @@ def read_source(path: Path, separator: str = ";") -> pd.DataFrame:
         frame["value"] = pd.to_numeric(frame["value"], errors="raise") * np.power(10.0, multiplier)
         if np.isinf(frame["value"].to_numpy(dtype=float)).any():
             raise ValueError("Бесконечное значение источника")
-        LOGGER.info("%s: прочитано %d, статус A %d, пропуски value %d", path.name, before, len(frame), frame["value"].isna().sum())
+        LOGGER.info(
+            "%s: прочитано %d, статус A %d, пропуски value %d",
+            path.name,
+            before,
+            len(frame),
+            frame["value"].isna().sum(),
+        )
         return frame
     except Exception:
         LOGGER.exception("Ошибка чтения %s", path)
@@ -115,13 +126,19 @@ def load_target(directory: Path, config: TargetConfig, separator: str = ";") -> 
             raise ValueError("Дубликаты целевых наблюдений: требуется явная политика винтажей")
         # FIXME: пока нет ОКАТО, разводим 49 дублей через source и порядок в выгрузке.
         if "source" not in frame or frame.loc[duplicates, "source"].isna().any():
-            raise ValueError("Неоднозначные МО нельзя разрешить без стабильного source/кода региона")
+            raise ValueError(
+                "Неоднозначные МО нельзя разрешить без стабильного source/кода региона"
+            )
         ambiguous = set(frame.loc[duplicates, "mo"].astype(str))
         frame["mo_original"] = frame["mo"].astype(str)
         frame["mo_source"] = frame["mo_original"] + " [" + frame["source"].astype(str) + "]"
-        slot = frame.groupby(["period", "mo_source", config.category_column], sort=False, observed=True).cumcount()
+        slot = frame.groupby(
+            ["period", "mo_source", config.category_column], sort=False, observed=True
+        ).cumcount()
         frame["mo"] = frame["mo_source"]
-        frame.loc[slot.gt(0), "mo"] = frame.loc[slot.gt(0), "mo_source"] + "#" + (slot[slot.gt(0)] + 1).astype(str)
+        frame.loc[slot.gt(0), "mo"] = (
+            frame.loc[slot.gt(0), "mo_source"] + "#" + (slot[slot.gt(0)] + 1).astype(str)
+        )
         if frame.duplicated([*keys, config.category_column]).any():
             raise ValueError("Не удалось сформировать уникальный слот неоднозначного наблюдения")
         LOGGER.warning(
@@ -130,10 +147,21 @@ def load_target(directory: Path, config: TargetConfig, separator: str = ";") -> 
             len(ambiguous),
         )
     if config.category_mode == "sum":
-        result = frame.groupby(keys, observed=True)["value"].sum(min_count=len(categories)).rename("y").reset_index()
+        result = (
+            frame.groupby(keys, observed=True)["value"]
+            .sum(min_count=len(categories))
+            .rename("y")
+            .reset_index()
+        )
     else:
         result = frame[[*keys, "value"]].rename(columns={"value": "y"})
-    LOGGER.info("Таргет: %d строк, %d МО, %s — %s", len(result), result["mo"].nunique(), result["period"].min(), result["period"].max())
+    LOGGER.info(
+        "Таргет: %d строк, %d МО, %s — %s",
+        len(result),
+        result["mo"].nunique(),
+        result["period"].min(),
+        result["period"].max(),
+    )
     return result.sort_values(["mo", "period"]).reset_index(drop=True)
 
 
@@ -143,18 +171,32 @@ def _macro_table(frame: pd.DataFrame, source: MacroSourceConfig) -> pd.DataFrame
         raise ValueError(f"{source.name}: отсутствуют измерения")
     if not frame["freq"].eq(source.frequency).all():
         raise ValueError(f"{source.name}: неверная частота")
-    known = {"period", "value", "obs_status", "source", "freq", "decimals", "unit_mult", *dimensions}
+    known = {
+        "period",
+        "value",
+        "obs_status",
+        "source",
+        "freq",
+        "decimals",
+        "unit_mult",
+        *dimensions,
+    }
     if set(frame.columns).difference(known):
-        raise ValueError(f"{source.name}: неописанные измерения {set(frame.columns).difference(known)}")
+        raise ValueError(
+            f"{source.name}: неописанные измерения {set(frame.columns).difference(known)}"
+        )
     if frame.duplicated(["period", *dimensions]).any():
         raise ValueError(f"{source.name}: дубликаты измерений и дат")
     frame = frame.sort_values("period").copy()
     frame["period"] = month_start(frame["period"])
     if source.frequency == "Месяц" and frame.duplicated(["period", *dimensions]).any():
         raise ValueError(f"{source.name}: несколько наблюдений одного месяца")
-    # NOTE: JSON-ключ длинный, зато разные срезы не схлопнутся после slugify.
+    # JSON-ключ длинный, зато разные срезы не схлопнутся после slugify.
     frame["indicator"] = frame[dimensions].apply(
-        lambda row: source.name + "::" + json.dumps(row.to_dict(), ensure_ascii=False, sort_keys=True), axis=1,
+        lambda row: (
+            source.name + "::" + json.dumps(row.to_dict(), ensure_ascii=False, sort_keys=True)
+        ),
+        axis=1,
     )
     grouped = frame.groupby(["period", "indicator"], observed=True)["value"]
     if source.aggregation == "sum":
@@ -176,11 +218,20 @@ def load_macro(directory: Path, config: DataConfig) -> pd.DataFrame:
     if not tables:
         return pd.DataFrame({"period": pd.Series(dtype="datetime64[ns]")})
     combined = pd.concat(tables, axis=1).sort_index()
-    calendar = pd.date_range(combined.index.min(), combined.index.max() + pd.offsets.MonthBegin(config.macro_lag_months), freq="MS")
+    calendar = pd.date_range(
+        combined.index.min(),
+        combined.index.max() + pd.offsets.MonthBegin(config.macro_lag_months),
+        freq="MS",
+    )
     result = combined.reindex(calendar).shift(config.macro_lag_months)
     result = result.add_prefix("macro_").add_suffix(f"_lag_{config.macro_lag_months}")
     result.index.name = "period"
-    LOGGER.info("Макро: %d месяцев, %d признаков, %d пропусков", len(result), len(result.columns), result.isna().sum().sum())
+    LOGGER.info(
+        "Макро: %d месяцев, %d признаков, %d пропусков",
+        len(result),
+        len(result.columns),
+        result.isna().sum().sum(),
+    )
     return result.reset_index()
 
 

@@ -1,4 +1,5 @@
 """Причинная детекция: сигнал датируется моментом обнаружения, не задним числом."""
+
 from __future__ import annotations
 
 import logging
@@ -33,7 +34,9 @@ class DetectionConfig(BaseModel):
     residual_quantile: float = Field(default=0.90, gt=0.5, lt=1.0)
     tda_quantile: float = Field(default=0.85, gt=0.5, lt=1.0)
     macro_alert_share: float = Field(default=0.085, gt=0.0, le=1.0)
-    national_history: str | None = "datasets/potrebitelskie-beznalicnye-rashody-na-urovne-munizipalnyh-obrazovanij_ru_1764079373653.csv"
+    national_history: str | None = (
+        "datasets/potrebitelskie-beznalicnye-rashody-na-urovne-munizipalnyh-obrazovanij_ru_1764079373653.csv"
+    )
     national_category_column: str = "category_15"
     national_category: str = "Все категории"
     news_k: float = Field(default=2.0, gt=0)
@@ -49,7 +52,12 @@ def validate_series(frame: pd.DataFrame) -> pd.DataFrame:
     if not {"period", "y", "prediction"}.issubset(frame) or frame.empty:
         raise ValueError("Ожидается непустой ряд period/y/prediction")
     data = frame.copy().sort_values("period").reset_index(drop=True)
-    data["period"] = pd.to_datetime(data["period"], errors="raise", utc=True).dt.tz_localize(None).dt.to_period("M").dt.to_timestamp()
+    data["period"] = (
+        pd.to_datetime(data["period"], errors="raise", utc=True)
+        .dt.tz_localize(None)
+        .dt.to_period("M")
+        .dt.to_timestamp()
+    )
     if data.period.isna().any() or data.period.duplicated().any():
         raise ValueError("Пропуски или дубликаты дат")
     expected = pd.date_range(data.period.iloc[0], data.period.iloc[-1], freq="MS")
@@ -70,7 +78,9 @@ def detect_changepoints(frame: pd.DataFrame, config: DetectionConfig) -> pd.Data
     try:
         import ruptures as rpt
     except ImportError as exc:
-        raise RuntimeError("Для PELT/BinSeg установите ruptures; подмена алгоритмов запрещена") from exc
+        raise RuntimeError(
+            "Для PELT/BinSeg установите ruptures; подмена алгоритмов запрещена"
+        ) from exc
     n = len(data)
     result = data.copy()
     residual = data.y.to_numpy(dtype=float) - data.prediction.to_numpy(dtype=float)
@@ -86,7 +96,9 @@ def detect_changepoints(frame: pd.DataFrame, config: DetectionConfig) -> pd.Data
     past = news.shift(1).rolling(config.window, min_periods=config.min_history)
     news_z = (news - past.mean()) / past.std().clip(lower=1e-8)
     sentiment = data.get("sentiment_index", pd.Series(np.nan, index=data.index))
-    result["news_alert"] = (news_z.ge(config.news_k) | sentiment.le(config.negative_sentiment)).astype(int)
+    result["news_alert"] = (
+        news_z.ge(config.news_k) | sentiment.le(config.negative_sentiment)
+    ).astype(int)
     result["news_eligible"] = news_z.notna() | sentiment.notna()
     result["news_score"] = news_z
     result["residual"] = residual
@@ -94,20 +106,24 @@ def detect_changepoints(frame: pd.DataFrame, config: DetectionConfig) -> pd.Data
     positive = negative = 0.0
     if n <= config.min_history:
         return result
-    center = float(np.mean(levels[:config.min_history]))
-    scale = _scale(levels[:config.min_history])
+    center = float(np.mean(levels[: config.min_history]))
+    scale = _scale(levels[: config.min_history])
     absolute_residual = np.abs(residual)
     for i in range(config.min_history, n):
         start = max(0, i - config.window + 1)
-        history = levels[max(0, i - config.window):i]
+        history = levels[max(0, i - config.window) : i]
         z = (levels[i] - center) / scale
         positive = max(0.0, positive + z - config.drift)
         negative = max(0.0, negative - z - config.drift)
         score = max(positive, negative) / config.threshold
-        result.loc[i, ["cusum_score", "cusum_eligible", "cusum_shock"]] = [score, True, int(score >= 1)]
+        result.loc[i, ["cusum_score", "cusum_eligible", "cusum_shock"]] = [
+            score,
+            True,
+            int(score >= 1),
+        ]
         if score >= 1:
             positive = negative = 0.0
-        residual_history = absolute_residual[max(0, i - config.window):i]
+        residual_history = absolute_residual[max(0, i - config.window) : i]
         residual_mean = float(np.mean(residual_history))
         residual_sigma = _scale(residual_history)
         sigma_barrier = residual_mean + config.residual_k * residual_sigma
@@ -115,19 +131,29 @@ def detect_changepoints(frame: pd.DataFrame, config: DetectionConfig) -> pd.Data
         barrier = min(sigma_barrier, quantile_barrier)
         barrier = max(barrier, 1e-8)
         ratio = absolute_residual[i] / barrier
-        result.loc[i, ["residual_score", "residual_eligible", "residual_shock"]] = [ratio, True, int(ratio >= 1)]
-        recent = result.iloc[max(0, i - config.news_lookback):i + 1]
+        result.loc[i, ["residual_score", "residual_eligible", "residual_shock"]] = [
+            ratio,
+            True,
+            int(ratio >= 1),
+        ]
+        recent = result.iloc[max(0, i - config.news_lookback) : i + 1]
         known = bool(recent.news_eligible.any())
         supported = bool(recent.news_alert.any())
-        result.loc[i, ["residual_news_score", "residual_news_eligible", "residual_news_shock"]] = [ratio if known else np.nan, known, int(ratio > 1 and supported)]
-        segment = (levels[start:i + 1] - np.mean(history)) / _scale(history)
+        result.loc[i, ["residual_news_score", "residual_news_eligible", "residual_news_shock"]] = [
+            ratio if known else np.nan,
+            known,
+            int(ratio > 1 and supported),
+        ]
+        segment = (levels[start : i + 1] - np.mean(history)) / _scale(history)
         if len(segment) < 2 * config.min_size:
             continue
         breaks_by_method: dict[str, list[int]] = {}
-        # NOTE: голый BIC на коротком OOF зануляет PELT, поэтому штраф зажат сверху.
+        # Голый BIC на коротком OOF зануляет PELT, поэтому штраф зажат сверху.
         adaptive_penalty = min(config.pen, max(0.5, 0.35 * float(np.log(len(segment)))))
         for name, algorithm in (("pelt", rpt.Pelt), ("binseg", rpt.Binseg)):
-            fitted = algorithm(model=config.model, min_size=config.min_size, jump=1).fit(segment.reshape(-1, 1))
+            fitted = algorithm(model=config.model, min_size=config.min_size, jump=1).fit(
+                segment.reshape(-1, 1)
+            )
             breaks_by_method[name] = fitted.predict(pen=adaptive_penalty)[:-1]
         for name, breaks in breaks_by_method.items():
             result.loc[i, f"{name}_eligible"] = True
@@ -138,7 +164,11 @@ def detect_changepoints(frame: pd.DataFrame, config: DetectionConfig) -> pd.Data
                     continue
                 seen[name].add(date)
                 contrast = abs(float(segment[:boundary].mean() - segment[boundary:].mean()))
-                result.loc[i, [f"{name}_shock", f"{name}_score", f"{name}_break_period"]] = [1, contrast, date]
+                result.loc[i, [f"{name}_shock", f"{name}_score", f"{name}_break_period"]] = [
+                    1,
+                    contrast,
+                    date,
+                ]
     return result
 
 
@@ -154,9 +184,14 @@ class ConsensusShockDetector:
             raise ValueError("Консенсус ожидает один агрегированный сигнал на месяц")
         dates = pd.to_datetime(data["period"], errors="raise")
         tda = data["tda_shock"].fillna(False).astype(bool)
-        previous = pd.Series(tda.to_numpy(), index=dates).reindex(
-            dates - pd.offsets.MonthBegin(1), fill_value=False,
-        ).to_numpy(dtype=bool)
+        previous = (
+            pd.Series(tda.to_numpy(), index=dates)
+            .reindex(
+                dates - pd.offsets.MonthBegin(1),
+                fill_value=False,
+            )
+            .to_numpy(dtype=bool)
+        )
         news = data["news_alert"].fillna(False).astype(bool)
         cusum = data["cusum_shock"].fillna(False).astype(bool)
         pelt = data["pelt_shock"].fillna(False).astype(bool)
@@ -169,7 +204,9 @@ def aggregate_macro_alerts(frame: pd.DataFrame, config: DetectionConfig) -> pd.D
     if not {"period", config.entity_column}.issubset(frame.columns):
         raise ValueError("Для макроагрегации требуются period и колонка территории")
     data = frame.copy()
-    data["period"] = pd.to_datetime(data["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    data["period"] = (
+        pd.to_datetime(data["period"], errors="raise").dt.to_period("M").dt.to_timestamp()
+    )
     methods = tuple(
         column.removesuffix("_shock")
         for column in data.columns
@@ -180,7 +217,10 @@ def aggregate_macro_alerts(frame: pd.DataFrame, config: DetectionConfig) -> pd.D
         shock_column = f"{method}_shock"
         eligible_column = f"{method}_eligible"
         macro_column = f"{method}_macro_shock"
-        local = data.loc[~national_mask, ["period", shock_column] + ([eligible_column] if eligible_column in data else [])].copy()
+        local = data.loc[
+            ~national_mask,
+            ["period", shock_column] + ([eligible_column] if eligible_column in data else []),
+        ].copy()
         if eligible_column in local:
             eligible = local[eligible_column].eq(True)
             local["eligible_count"] = eligible.astype(int)
@@ -189,10 +229,14 @@ def aggregate_macro_alerts(frame: pd.DataFrame, config: DetectionConfig) -> pd.D
             local["eligible_count"] = 1
             local["alert_count"] = local[shock_column].fillna(False).astype(bool).astype(int)
         monthly = local.groupby("period", observed=True)[["alert_count", "eligible_count"]].sum()
-        monthly_share = monthly["alert_count"].div(monthly["eligible_count"].replace(0, np.nan)).fillna(0.0)
+        monthly_share = (
+            monthly["alert_count"].div(monthly["eligible_count"].replace(0, np.nan)).fillna(0.0)
+        )
         national_periods = set(data.loc[national_mask & data[shock_column].eq(True), "period"])
-        candidates = sorted(set(monthly_share.index[monthly_share.ge(config.macro_alert_share)]) | national_periods)
-        # NOTE: режем длинное CUSUM-плато, иначе один эпизод съедает следующее решение ЦБ.
+        candidates = sorted(
+            set(monthly_share.index[monthly_share.ge(config.macro_alert_share)]) | national_periods
+        )
+        # Режем длинное CUSUM-плато, иначе один эпизод съедает следующее решение ЦБ.
         macro_periods: set[pd.Timestamp] = set()
         clusters: list[list[pd.Timestamp]] = []
         for candidate in candidates:
@@ -246,7 +290,7 @@ def compare_shock_detectors(
             wass = ordered["tda_wasserstein_dist"].to_numpy(dtype=float)
             idx = ordered.index
             for i in range(config.min_history, len(wass)):
-                history = wass[max(0, i - config.window):i]
+                history = wass[max(0, i - config.window) : i]
                 finite = np.isfinite(history)
                 if finite.sum() < 3 or not np.isfinite(wass[i]):
                     continue
@@ -262,9 +306,8 @@ def compare_shock_detectors(
         data["tda_news_synergy_shock"] = False
         data["tda_news_synergy_eligible"] = False
         tolerance = config.event_tolerance
-        has_news = (
-            data.get("pelt_shock", pd.Series(False, index=data.index))
-            | data.get("residual_news_shock", pd.Series(False, index=data.index))
+        has_news = data.get("pelt_shock", pd.Series(False, index=data.index)) | data.get(
+            "residual_news_shock", pd.Series(False, index=data.index)
         )
         if "news_alert" in data:
             has_news = has_news | data["news_alert"].astype(bool)
@@ -296,14 +339,16 @@ def compare_shock_detectors(
             if eligible_col in data.columns
             else len(data)
         )
-        summary_rows.append({
-            "method": method,
-            "n_shocks": n_shocks,
-            "shock_rate": n_shocks / max(n_eligible, 1),
-            "n_eligible": n_eligible,
-            "mean_gap_months": _mean_shock_gap(data, shock_col),
-            "n_entities": int(data.loc[shocks, "mo"].nunique()) if n_shocks else 0,
-        })
+        summary_rows.append(
+            {
+                "method": method,
+                "n_shocks": n_shocks,
+                "shock_rate": n_shocks / max(n_eligible, 1),
+                "n_eligible": n_eligible,
+                "mean_gap_months": _mean_shock_gap(data, shock_col),
+                "n_entities": int(data.loc[shocks, "mo"].nunique()) if n_shocks else 0,
+            }
+        )
 
     summary = pd.DataFrame(summary_rows)
 
@@ -365,7 +410,9 @@ def compare_shock_detectors(
     LOGGER.info(
         "Сравнение детекторов: %d методов, %d шоков всего",
         len(methods),
-        int(data[[f"{m}_shock" for m in methods if f"{m}_shock" in data.columns]].any(axis=1).sum()),
+        int(
+            data[[f"{m}_shock" for m in methods if f"{m}_shock" in data.columns]].any(axis=1).sum()
+        ),
     )
 
     return {

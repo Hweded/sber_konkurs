@@ -1,10 +1,12 @@
 """Презентационные графики месячного ряда и причинных сигналов, 300 DPI."""
+
 from __future__ import annotations
 
 import hashlib
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -22,18 +24,37 @@ def plot_case_study(frame: pd.DataFrame, entity: str, directory: Path) -> Path:
         axes[0].plot(frame.period, frame.prediction, label="CatBoost OOF", color="tab:blue")
         colors = ("tab:red", "tab:purple", "tab:orange", "tab:green", "tab:brown")
         for method, color in zip(METHODS, colors, strict=True):
-            dates = frame.loc[frame[f"{method}_shock"].eq(1), "detected_at" if "detected_at" in frame else "period"]
+            dates = frame.loc[
+                frame[f"{method}_shock"].eq(1),
+                "detected_at" if "detected_at" in frame else "period",
+            ]
             for number, date in enumerate(dates):
-                axes[0].axvline(date, color=color, alpha=0.55, linestyle="--", label=method if number == 0 else None)
+                axes[0].axvline(
+                    date,
+                    color=color,
+                    alpha=0.55,
+                    linestyle="--",
+                    label=method if number == 0 else None,
+                )
         axes[0].set_title(f"{entity}: расходы, прогноз и даты обнаружения")
         axes[0].set_ylabel("Расходы, исходные единицы")
         axes[0].legend(loc="best", ncol=3)
         if "sentiment_index" in frame:
-            axes[1].plot(frame.period, frame.sentiment_index, color="tab:blue", label="Лагированный сентимент")
+            axes[1].plot(
+                frame.period,
+                frame.sentiment_index,
+                color="tab:blue",
+                label="Лагированный сентимент",
+            )
         axes[1].set_ylabel("P(positive) − P(negative)")
         secondary = axes[1].twinx()
         if "news_shock_score" in frame:
-            secondary.plot(frame.period, frame.news_shock_score, color="tab:red", label="Лагированный новостной ажиотаж")
+            secondary.plot(
+                frame.period,
+                frame.news_shock_score,
+                color="tab:red",
+                label="Лагированный новостной ажиотаж",
+            )
         secondary.set_ylabel("Объём минус прошлое среднее")
         handles, labels = axes[1].get_legend_handles_labels()
         other, names = secondary.get_legend_handles_labels()

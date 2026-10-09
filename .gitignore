@@ -1,48 +1,83 @@
-# Python, IDE и локальные настройки
+# ==============================================================================
+# 1. Python, виртуальные окружения и IDE
+# ==============================================================================
 __pycache__/
 *.py[cod]
+*$py.class
 *.so
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.ipynb_checkpoints/
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Виртуальные окружения
 .venv/
 venv/
 env/
+ENV/
+env.bak/
+venv.bak/
+
+# Кэши линтеров и тестов
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# IDE и системный мусор
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 .DS_Store
 Thumbs.db
+desktop.ini
+.ipynb_checkpoints/
 .env
 
-# Логи и временные результаты
+# ==============================================================================
+# 2. Логи, временные файлы и блокировки
+# ==============================================================================
+.pipeline.lock
 *.log
 catboost_info/
 logs/
+tmp/
+_diagnose*
+_env.txt
+deliverables/vendor/
+reports/fast_run/
+
+# Временные артефакты сборщика
+deliverables/*.txt
+deliverables/*.json
+deliverables/*.csv
+deliverables/*.html
+deliverables/*.jsx
+
+# Тяжелые кэши данных
 *.parquet
 reports/*.parquet
 reports/artifacts/*.parquet
 
-# Сырые, промежуточные и обработанные данные (п. 9.2 Положения)
-data/raw/*
-data/interim/*
-data/processed/*
-datasets/
-_diagnose*
-_env.txt
-reports/artifacts/slide*_check.png
-reports/artifacts/run.json
-reports/figures/case_study_*.png
-!reports/figures/case_study_d9f47c0990ce.png
-!reports/figures/case_study_6dd254fda2ee.png
-!reports/figures/case_study_5762f61cc65c.png
-!data/raw/.gitkeep
-!data/interim/.gitkeep
-!data/processed/.gitkeep
-
-# Веса моделей и кэш HuggingFace
+# ==============================================================================
+# 3. Веса моделей и кэш HuggingFace / PyTorch
+# ==============================================================================
 *.pt
 *.pth
 *.bin
@@ -52,18 +87,58 @@ checkpoints/
 hf_cache/
 models/
 
-# Обязательные артефакты жюри
+# ==============================================================================
+# 4. Данные (п. 9.2 Положения — запрет публикации исходных датасетов)
+# ==============================================================================
+data/raw/*
+data/interim/*
+data/processed/*
+datasets/
+notebooks/
+
+# Сохраняем структуру каталогов с помощью маркеров
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+
+# Игнорируем таблицы по умолчанию
+*.csv
+*.xlsx
+*.xls
+
+# Исключения: файлы сабмита и реестры МО
+!submission.csv
+!reports/submission.csv
+!configs/submission_roster.csv
+!reports/artifacts/submission_roster.csv
+
+# ==============================================================================
+# 5. Обязательные артефакты жюри и воспроизводимости
+# ==============================================================================
+# Презентация
+!presentation.pdf
+!reports/presentation.pdf
+
+# Корневые отчеты и документация
+!METHODOLOGY_REPORT.md
+!README.md
+!metrics.json
+!final_summary.json
+
+# Артефакты в reports/artifacts/
 !reports/artifacts/*.csv
 !reports/artifacts/*.json
 !reports/artifacts/*.md
-!reports/figures/*.png
-!presentation.pdf
 
-# Неаудированные рабочие заметки и артефакты проверки PDF
-reports/*.md
+# Исключения из reports/artifacts/ (отладочный мусор и чеки слайдов)
 reports/artifacts/run.json
 reports/artifacts/slide*_check.png
-reports/figures/case_study_*.png
+
+# Иллюстрации кейс-стади: блокируем всё, открываем только 3 утвержденных графика
+reports/figures/*
 !reports/figures/case_study_d9f47c0990ce.png
 !reports/figures/case_study_6dd254fda2ee.png
 !reports/figures/case_study_5762f61cc65c.png
+
+# Черновики заметок в папке reports/ (при этом reports/artifacts/*.md разрешены выше)
+reports/*.md

@@ -243,7 +243,7 @@ def test_parallel_aggregation_preserves_schema_and_test_order(monkeypatch: Any) 
         }
     )
 
-    result = predict_prophet_parallel(train, test)
+    result = predict_prophet_parallel(train, test, max_fallback_fraction=1.0)
 
     assert result.columns.tolist() == ["period", "mo", "prophet_prediction"]
     assert result["mo"].tolist() == ["b", "a", "b"]

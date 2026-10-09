@@ -1,4 +1,5 @@
 """TDA-признаки месячных расходов на причинных скользящих окнах."""
+
 from __future__ import annotations
 
 import json
@@ -44,6 +45,7 @@ class TopologicalAnalyzer:
     def _get_rips(self) -> Any:
         if self._rips is None:
             from ripser import Rips
+
             self._rips = Rips(maxdim=max(self.config.homology_dimensions))
         return self._rips
 
@@ -74,9 +76,7 @@ class TopologicalAnalyzer:
         if not np.isfinite(values).all():
             raise ValueError("Ряд содержит неконечные значения")
         if len(values) < self.config.window_size:
-            raise ValueError(
-                f"Ряд длиной {len(values)} короче окна {self.config.window_size}"
-            )
+            raise ValueError(f"Ряд длиной {len(values)} короче окна {self.config.window_size}")
 
         ws = self.config.window_size
         d = self.config.embedding_dimension
@@ -93,12 +93,12 @@ class TopologicalAnalyzer:
             window = values[t - ws + 1 : t + 1].copy()
             window = (window - window.mean()) / (window.std(ddof=1) + 1e-10)
 
-            # NOTE: на коротких окнах H₁ часто пуст, поэтому откатываемся к конечным H₀.
+            # На коротких окнах H₁ часто пуст, поэтому откатываемся к конечным H₀.
             topology_diagram: NDArray[np.float64] = np.empty((0, 2), dtype=np.float64)
             try:
                 embedded = self._takens_embedding(window, d, tau)
                 embedded = np.asarray(scaler.fit_transform(embedded), dtype=np.float64)
-                # NOTE: квадратный point cloud не является матрицей расстояний.
+                # Квадратный point cloud не является матрицей расстояний.
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
                         "ignore",
@@ -148,7 +148,7 @@ class TopologicalAnalyzer:
         result["tda_entropy"] = np.asarray(entropy_values, dtype=np.float64)
         result["tda_wasserstein_dist"] = np.asarray(wasserstein_values, dtype=np.float64)
 
-        # NOTE: признак окна, закрывшегося в t, становится доступен только в t+1.
+        # Признак окна, закрывшегося в t, становится доступен только в t+1.
         result = result.shift(1)
         result.index.name = "period"
         result = result.reset_index()
@@ -204,15 +204,15 @@ def build_tda_features(
         raise ValueError("Панель TDA должна содержать mo, period, y")
     data["period"] = pd.to_datetime(data["period"], errors="raise")
 
-    # TDA is an optional enrichment. Keep the forecasting ETL usable when
-    # optional ripser/persim wheels are absent; install them and rerun with
-    # ``force=True`` when topological columns are required.
+    # TDA необязательна: без ripser/persim ETL продолжает работать.
     try:
         import ripser  # noqa: F401
         import persim  # noqa: F401
     except ImportError as error:
         LOGGER.warning("TDA пропущен: необязательная зависимость недоступна (%s)", error)
-        return pd.DataFrame(columns=["period", "mo", "tda_entropy", "tda_wasserstein_dist", "tda_shock"])
+        return pd.DataFrame(
+            columns=["period", "mo", "tda_entropy", "tda_wasserstein_dist", "tda_shock"]
+        )
 
     analyzer = TopologicalAnalyzer(config)
     parts: list[pd.DataFrame] = []
@@ -222,7 +222,9 @@ def build_tda_features(
     for idx, (mo, group) in enumerate(data.groupby("mo", sort=True, observed=True)):
         ts = group.set_index("period")["y"].sort_index()
         if len(ts) < config.window_size:
-            LOGGER.debug("TDA: МО %s пропущен (длина %d < окна %d)", mo, len(ts), config.window_size)
+            LOGGER.debug(
+                "TDA: МО %s пропущен (длина %d < окна %d)", mo, len(ts), config.window_size
+            )
             continue
         try:
             features = analyzer.fit_transform(ts)

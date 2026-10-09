@@ -1,4 +1,11 @@
-"""Параллельный причинный Prophet-прогноз по муниципальным образованиям."""
+"""Параллельный причинный Prophet-прогноз по муниципальным образованиям.
+
+Модуль работает в двух режимах.  Обычный режим запускает все МО одним вызовом
+joblib.  Memory-safe режим (``--retrain-from-scratch``) режет 2 094 ряда на
+мини-батчи, при необходимости сбрасывает каждый батч на диск и явно освобождает
+Stan-буферы между батчами, чтобы пиковое потребление RAM не зависело от числа МО.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -8,6 +15,7 @@ import sys
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -15,7 +23,9 @@ import pandas as pd
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
-# NOTE: каждый loky-worker уже занят одним Prophet; BLAS-потоки только жрут память.
+from src.memory import MemoryMonitor, empty_torch_cache, free, spill_frame
+
+# Каждый loky-worker уже занят одним Prophet; BLAS-потоки только жрут память.
 for _thread_variable in (
     "OMP_NUM_THREADS",
     "MKL_NUM_THREADS",
@@ -24,8 +34,13 @@ for _thread_variable in (
 ):
     os.environ.setdefault(_thread_variable, "1")
 
+
 def _silence_prophet_logging() -> None:
-    """Подавляет служебный INFO-вывод Prophet/CmdStan во всех loky-процессах."""
+    """Подавляет служебный INFO-вывод Prophet/CmdStan во всех loky-процессах.
+
+    CmdStan буферизует stdout/err; на 2 094 рядах это заметная доля RSS.  Уровень
+    строго ERROR — требование memory-safe режима.
+    """
     logger_names = {
         "prophet",
         "prophet.models",
@@ -33,11 +48,13 @@ def _silence_prophet_logging() -> None:
         "cmdstanpy",
         "cmdstanpy.model",
         "cmdstanpy.utils",
+        "pystan",
+        "stan",
     }
     logger_names.update(
         name
         for name in logging.root.manager.loggerDict
-        if name.startswith(("prophet", "cmdstanpy"))
+        if name.startswith(("prophet", "cmdstanpy", "pystan", "stan"))
     )
     for logger_name in logger_names:
         logger = logging.getLogger(logger_name)
@@ -52,6 +69,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module=r"prophet(\..*)?"
 LOGGER = logging.getLogger(__name__)
 PROPHET_OUTPUT_COLUMNS = ("period", "mo", "prophet_prediction")
 CHRONOS_BATCH_SIZE = 128
+PROPHET_BATCH_SIZE = 128
 
 
 def _empty_prediction_frame() -> pd.DataFrame:
@@ -89,6 +107,7 @@ def _constant_predictions(
             "mo": np.repeat(mo, len(test)),
             "prophet_prediction": np.full(len(test), value, dtype=np.float64),
             "_test_order": test["_test_order"].to_numpy(dtype=np.int64),
+            "_prophet_fallback": True,
         }
     )
 
@@ -105,11 +124,15 @@ def _cmdstan_windows_probe() -> Iterator[None]:
     def run_command(command: list[str], cwd: str | None = None, **kwargs: Any) -> None:
         if command != ["where.exe", "tbb.dll"]:
             return original_command(command, cwd=cwd, **kwargs)
-        # CmdStan needs only the exit code; Windows emits localized OEM text.
+        # От CmdStan нужен только код возврата; текст Windows локализован.
         try:
             subprocess.run(
-                command, cwd=cwd, stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+                command,
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
             )
         except (OSError, subprocess.CalledProcessError) as error:
             raise RuntimeError(f"Windows TBB lookup failed: {error}") from error
@@ -157,18 +180,19 @@ def _fit_predict_single_mo(
     prophet_params: Mapping[str, Any] | None = None,
     seed: int = 42,
 ) -> pd.DataFrame:
-    """Обучает Prophet одного МО с константным fallback на плохой истории."""
+    """Обучает Prophet одного МО с константным fallback на плохой истории.
+
+    Модель освобождается в ``finally``: внутри долгоживущего loky-worker объект
+    Prophet со Stan-компилятором иначе накапливался бы до конца процесса.
+    """
     test = df_test_mo.copy()
     if "_test_order" not in test.columns:
         test["_test_order"] = np.arange(len(test), dtype=np.int64)
     if test.empty:
         return _empty_prediction_frame()
 
-    raw_history = df_train_mo.copy()
+    raw_history = _normalise_prophet_train(df_train_mo)
     fallback = _fallback_value(raw_history)
-    if not {"period", "y"}.issubset(raw_history.columns):
-        LOGGER.warning("Prophet МО %s: отсутствуют period/y, применён fallback", mo)
-        return _constant_predictions(mo, test, fallback)
 
     history = raw_history[["period", "y"]].rename(columns={"period": "ds"})
     history["ds"] = pd.to_datetime(history["ds"], errors="coerce")
@@ -192,16 +216,19 @@ def _fit_predict_single_mo(
     model = _create_prophet(prophet_params)
     try:
         model.fit(history, seed=seed)
-        predicted = pd.to_numeric(model.predict(future)["yhat"], errors="coerce").to_numpy(
-            dtype=np.float64
-        )
+        # Prophet сортирует ds внутри predict; верни прогноз к исходному порядку.
+        order = np.argsort(future["ds"].to_numpy(), kind="stable")
+        sorted_prediction = pd.to_numeric(
+            model.predict(future.iloc[order])["yhat"], errors="coerce"
+        ).to_numpy(dtype=np.float64)
+        predicted = np.empty(len(test), dtype=np.float64)
+        predicted[order] = sorted_prediction
         if predicted.shape != (len(test),) or not np.isfinite(predicted).all():
             raise ValueError("Prophet вернул неконечный прогноз или неверную длину")
         result = _constant_predictions(mo, test, fallback)
         result["prophet_prediction"] = predicted
+        result["_prophet_fallback"] = False
         return result
-    except (KeyboardInterrupt, SystemExit):
-        raise
     except Exception as error:
         LOGGER.warning(
             "Prophet МО %s: %s; применён константный fallback",
@@ -209,6 +236,10 @@ def _fit_predict_single_mo(
             error,
         )
         return _constant_predictions(mo, test, fallback)
+    finally:
+        # Stan держит C++-буферы до сборки мусора.
+        del model
+        free()
 
 
 @contextmanager
@@ -228,7 +259,23 @@ def _tqdm_joblib(progress: tqdm[Any]) -> Iterator[None]:
         yield
     finally:
         joblib.parallel.BatchCompletionCallBack = original_callback
-        progress.close()
+
+
+def release_prophet_workers() -> None:
+    """Shut the reusable loky pool down so Prophet/Stan memory leaves the process.
+
+    Four live workers each keep a Prophet/Stan runtime resident.  On this host the
+    Windows commit limit is RAM + a 2 GiB pagefile, and the Chronos checkpoint
+    load fails with WinError 1455 unless that headroom is returned first.
+    """
+    try:
+        from joblib.externals.loky import get_reusable_executor
+
+        get_reusable_executor().shutdown(wait=True)
+        LOGGER.info("Prophet: loky-пул остановлен, память воркеров освобождена")
+    except Exception as error:  # pragma: no cover - best effort
+        LOGGER.debug("loky shutdown пропущен: %s", error)
+    free()
 
 
 def predict_chronos_batched(
@@ -240,24 +287,35 @@ def predict_chronos_batched(
     device: Any | None = None,
     mixed_precision: bool = False,
 ) -> np.ndarray:
-    """Пакетно получает медианный прогноз Chronos для нескольких рядов."""
+    """Пакетно получает медианный прогноз Chronos для нескольких рядов.
+
+    Инференс идёт без графа вычислений (``inference_mode`` сильнее ``no_grad``),
+    а после каждого батча освобождаются тензоры и torch-кэш: на 2 094 рядах это
+    единственное место, где промежуточные активации реально уходят из RAM.
+    """
     if not contexts:
         return np.empty(0, dtype=np.float64)
     if prediction_length <= 0 or batch_size <= 0:
         raise ValueError("prediction_length и batch_size должны быть положительными")
     import torch
 
-    target_device = device if device is not None else getattr(pipeline, "device", torch.device("cpu"))
+    target_device = (
+        device if device is not None else getattr(pipeline, "device", torch.device("cpu"))
+    )
     if isinstance(target_device, str):
         target_device = torch.device(target_device)
     tensors = [
-        (value if isinstance(value, torch.Tensor) else torch.as_tensor(value, dtype=torch.float32)).to(target_device)
+        (
+            value
+            if isinstance(value, torch.Tensor)
+            else torch.as_tensor(value, dtype=torch.float32)
+        ).to(target_device)
         for value in contexts
     ]
     lengths = [int(tensor.numel()) for tensor in tensors]
     unique_lengths = sorted(set(lengths))
     if len(unique_lengths) != 1:
-        # NOTE: Chronos требует равные длины; padding исказит ряд, поэтому группируем.
+        # Chronos требует равные длины; padding исказит ряд, поэтому группируем.
         grouped_predictions: list[np.ndarray | None] = [None] * len(tensors)
         for length in unique_lengths:
             indices = [index for index, value in enumerate(lengths) if value == length]
@@ -273,21 +331,30 @@ def predict_chronos_batched(
                 grouped_predictions[index] = prediction
         if any(prediction is None for prediction in grouped_predictions):
             raise RuntimeError("Chronos не вернул прогноз для каждой группы контекстов")
-        return np.stack([prediction for prediction in grouped_predictions if prediction is not None], axis=0)
+        return np.stack(
+            [prediction for prediction in grouped_predictions if prediction is not None], axis=0
+        )
     predictions: list[np.ndarray] = []
     progress = tqdm(total=len(tensors), desc="Chronos Inference", unit="series", dynamic_ncols=True)
     try:
         for start in range(0, len(tensors), batch_size):
-            batch = tensors[start:start + batch_size]
-            with torch.inference_mode(), torch.autocast(
-                device_type=target_device.type if hasattr(target_device, "type") else str(target_device),
-                enabled=mixed_precision and str(target_device).startswith("cuda"),
+            batch = tensors[start : start + batch_size]
+            with (
+                torch.inference_mode(),
+                torch.autocast(
+                    device_type=target_device.type
+                    if hasattr(target_device, "type")
+                    else str(target_device),
+                    enabled=mixed_precision and str(target_device).startswith("cuda"),
+                ),
             ):
                 if hasattr(pipeline, "predict"):
-                    # NOTE: в Chronos 2.3.x batch_size уже задан внешним циклом.
+                    # В Chronos 2.3.x batch_size уже задан внешним циклом.
                     raw = pipeline.predict(batch, prediction_length=prediction_length)
                     samples = raw[0] if isinstance(raw, tuple) else raw
-                    sample_tensor = samples if isinstance(samples, torch.Tensor) else torch.as_tensor(samples)
+                    sample_tensor = (
+                        samples if isinstance(samples, torch.Tensor) else torch.as_tensor(samples)
+                    )
                     if sample_tensor.ndim == 3:
                         values_tensor = sample_tensor.median(dim=1).values
                     elif sample_tensor.ndim == 2:
@@ -306,8 +373,14 @@ def predict_chronos_batched(
                 raise ValueError("Chronos вернул неконечный прогноз или неверную форму")
             predictions.append(values)
             progress.update(len(batch))
+            # Батч и его тензоры живут только внутри одной итерации.
+            del batch, values_tensor, values
+            empty_torch_cache()
+            free()
     finally:
         progress.close()
+        del tensors
+        free()
     return np.concatenate(predictions, axis=0)
 
 
@@ -343,7 +416,9 @@ def chronos_fallback_predictions(
             array = np.asarray(context, dtype=np.float64).reshape(-1)
             finite = array[np.isfinite(array)]
             if finite.size == 0:
-                raise ValueError("Невозможно построить Chronos fallback: контекст не содержит конечных значений")
+                raise ValueError(
+                    "Невозможно построить Chronos fallback: контекст не содержит конечных значений"
+                )
             value = float(finite[-1])
         if not np.isfinite(value):
             raise ValueError("Невозможно построить Chronos fallback: baseline не конечен")
@@ -384,8 +459,11 @@ def predict_chronos_resilient(
     try:
         pipeline = pipeline_factory(target, dtype)
         result = predict_chronos_batched(
-            pipeline, contexts, prediction_length=prediction_length,
-            batch_size=batch_size, device=torch.device(target),
+            pipeline,
+            contexts,
+            prediction_length=prediction_length,
+            batch_size=batch_size,
+            device=torch.device(target),
         )
         return result, target
     except (RuntimeError, MemoryError) as error:
@@ -398,8 +476,11 @@ def predict_chronos_resilient(
             try:
                 pipeline = pipeline_factory("cpu", torch.float32)
                 result = predict_chronos_batched(
-                    pipeline, contexts, prediction_length=prediction_length,
-                    batch_size=max(1, batch_size // 2), device=torch.device("cpu"),
+                    pipeline,
+                    contexts,
+                    prediction_length=prediction_length,
+                    batch_size=max(1, batch_size // 2),
+                    device=torch.device("cpu"),
                 )
                 LOGGER.warning("Chronos fallback: CPU, batch_size=%d", max(1, batch_size // 2))
                 return result, "cpu"
@@ -408,7 +489,31 @@ def predict_chronos_resilient(
                     raise
                 LOGGER.error("Chronos: CPU также не смог выполнить инференс: %s", cpu_error)
         LOGGER.warning("Chronos fallback: last-value baseline; model inference skipped")
-        return chronos_fallback_predictions(contexts, prediction_length, fallback_values), "baseline"
+        return chronos_fallback_predictions(
+            contexts, prediction_length, fallback_values
+        ), "baseline"
+
+
+@contextmanager
+def _prophet_worker_cleanup(enabled: bool) -> Iterator[None]:
+    """Освободи Stan-пул даже при ошибке воркера или записи батча."""
+    try:
+        yield
+    finally:
+        if enabled:
+            release_prophet_workers()
+
+
+def _normalise_prophet_train(train: pd.DataFrame) -> pd.DataFrame:
+    """Приведи поддерживаемые колонки даты и цели к period/y."""
+    date_column = next((name for name in ("ds", "period", "date") if name in train), None)
+    target_column = next((name for name in ("y", "target", "value") if name in train), None)
+    if date_column is None or target_column is None:
+        raise ValueError(f"Prophet: не найдены колонки даты/таргета среди {train.columns.tolist()}")
+    columns = [date_column, target_column]
+    if "mo" in train:
+        columns.append("mo")
+    return train[columns].rename(columns={date_column: "period", target_column: "y"}).copy()
 
 
 def predict_prophet_parallel(
@@ -417,8 +522,20 @@ def predict_prophet_parallel(
     prophet_params: Mapping[str, Any] | None = None,
     *,
     seed: int = 42,
+    batch_size: int | None = None,
+    spill_dir: Path | None = None,
+    monitor: MemoryMonitor | None = None,
+    release_workers: bool = True,
+    max_fallback_fraction: float = 0.05,
 ) -> pd.DataFrame:
-    """Параллельно прогнозирует МО и восстанавливает исходный порядок test."""
+    """Параллельно прогнозирует МО и восстанавливает исходный порядок test.
+
+    Memory-safe режим (``batch_size`` и/или ``spill_dir``) режет МО на мини-батчи:
+    после каждого батча вызывается ``gc.collect()``, а результат при
+    необходимости сбрасывается в ``spill_dir/prophet_batch_*.parquet``.  Итоговая
+    таблица собирается из уже готовых батчей, поэтому пик RAM не растёт вместе с
+    числом муниципалитетов.
+    """
     if test.empty:
         return pd.DataFrame(
             {
@@ -429,6 +546,12 @@ def predict_prophet_parallel(
         )
     if not {"period", "mo"}.issubset(test.columns):
         raise ValueError("test Prophet должен содержать period и mo")
+    LOGGER.info("Prophet train matrix: cols=%s, rows=%d", train.columns.tolist(), len(train))
+    train = _normalise_prophet_train(train)
+    if "mo" not in train:
+        raise ValueError("Prophet: нет колонки mo в обучающей матрице")
+    if not 0 <= max_fallback_fraction <= 1:
+        raise ValueError("max_fallback_fraction должен лежать в [0, 1]")
 
     ordered_test = test.copy()
     ordered_test["_test_order"] = np.arange(len(ordered_test), dtype=np.int64)
@@ -440,30 +563,84 @@ def predict_prophet_parallel(
             & np.isfinite(pd.to_numeric(train["y"], errors="coerce").to_numpy(dtype=float))
         )
         if train.loc[valid_history].groupby("mo", observed=True).size().ge(3).any():
-            # Check once before launching workers; installation failures are global.
+            # Проверяем установку один раз: ошибка общая для всех workers.
             _create_prophet(prophet_params)
-    tasks = (
-        delayed(_fit_predict_single_mo)(
-            entity,
-            train.loc[train["mo"].eq(entity)].copy(),
-            ordered_test.loc[ordered_test["mo"].eq(entity)].copy(),
-            prophet_params,
-            seed,
-        )
-        for entity in entities
-    )
-    # NOTE: больше четырёх Stan-процессов на Windows забивают память и stdout.
-    workers = min(len(entities), max(1, min(4, os.cpu_count() or 1)))
-    progress = tqdm(total=len(entities), desc="Prophet folds", unit="MO")
-    with _tqdm_joblib(progress):
-        parts = Parallel(
-            n_jobs=workers,
-            batch_size=1,
-            backend="loky",
-            inner_max_num_threads=1,
-            verbose=0,
-        )(tasks)
+    # Больше четырёх Stan-процессов на Windows забивают память и stdout.
+    workers = min(len(entities), max(1, min(4, (os.cpu_count() or 1) - 2)))
+    chunk = int(batch_size) if batch_size is not None else 150
+    if chunk <= 0:
+        raise ValueError("batch_size должен быть положительным")
+    if spill_dir is not None:
+        spill_dir = Path(spill_dir)
+        spill_dir.mkdir(parents=True, exist_ok=True)
 
+    progress = tqdm(total=len(entities), desc="Prophet folds", unit="MO")
+    parts: list[pd.DataFrame] = []
+    spilled: list[Path] = []
+    fallback_entities = 0
+    train_groups = dict(tuple(train.groupby("mo", sort=False, observed=True)))
+    test_groups = dict(tuple(ordered_test.groupby("mo", sort=False, observed=True)))
+    LOGGER.info("Prophet: workers=%d, batch_size=%d, МО=%d", workers, chunk, len(entities))
+    with progress, _tqdm_joblib(progress), _prophet_worker_cleanup(release_workers):
+        for start in range(0, len(entities), chunk):
+            batch_entities = entities[start : start + chunk]
+            tasks = (
+                delayed(_fit_predict_single_mo)(
+                    entity,
+                    train_groups.get(entity, train.iloc[:0]),
+                    test_groups[entity],
+                    prophet_params,
+                    seed,
+                )
+                for entity in batch_entities
+            )
+            batch_parts = Parallel(
+                n_jobs=workers,
+                batch_size=1,
+                backend="loky",
+                inner_max_num_threads=1,
+                verbose=0,
+            )(tasks)
+            fallback_entities += sum(bool(part["_prophet_fallback"].any()) for part in batch_parts)
+            if fallback_entities > max_fallback_fraction * len(entities):
+                raise RuntimeError(
+                    "Более 5% МО ушли в fallback. Проверьте структуру входных данных! "
+                    f"fallback={fallback_entities}/{len(entities)}, "
+                    f"limit={max_fallback_fraction:.1%}"
+                )
+            combined_batch = (
+                pd.concat(batch_parts, ignore_index=True)
+                if batch_parts
+                else _empty_prediction_frame()
+            )
+            if spill_dir is not None:
+                spilled.append(
+                    spill_frame(
+                        combined_batch, spill_dir, f"prophet_batch_{start // chunk:04d}.parquet"
+                    )
+                )
+            else:
+                parts.append(combined_batch)
+            del batch_parts, combined_batch, tasks
+            free()
+            if monitor is not None:
+                monitor.log(
+                    f"prophet batch {start // chunk + 1}/{(len(entities) + chunk - 1) // chunk}"
+                )
+
+    if spilled:
+        LOGGER.info("Prophet: %d батчей сохранено в %s", len(spilled), spill_dir)
+        parts = [pd.read_parquet(path) for path in spilled]
     combined = pd.concat(parts, ignore_index=True) if parts else _empty_prediction_frame()
     combined = combined.sort_values("_test_order", kind="stable")
-    return combined.loc[:, list(PROPHET_OUTPUT_COLUMNS)].reset_index(drop=True)
+    result = combined.loc[:, list(PROPHET_OUTPUT_COLUMNS)].reset_index(drop=True)
+    result.attrs["prophet_diagnostics"] = {
+        "entities": len(entities),
+        "fallback_entities": fallback_entities,
+        "fitted_entities": len(entities) - fallback_entities,
+        "fallback_fraction": fallback_entities / len(entities),
+    }
+    LOGGER.info("Prophet итог: %s", result.attrs["prophet_diagnostics"])
+    del combined, parts
+    free()
+    return result

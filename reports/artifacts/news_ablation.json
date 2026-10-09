@@ -1,9 +1,12 @@
 {
   "status": "measured",
   "n": 12513,
-  "baseline_mae": 2064.275859538603,
-  "news_mae": 2194.579492898576,
-  "mae_delta": -130.303633359973,
-  "mae_improvement_pct": -6.312316871694553,
-  "leakage_check": "passed"
+  "baseline_mae": 2051.761647562362,
+  "news_mae": 2051.761647562362,
+  "mae_delta": 0.0,
+  "mae_improvement_pct": 0.0,
+  "leakage_check": "passed",
+  "production_mae_delta_pct": 0.0,
+  "sentiment_tree_effect_pct": 12.44,
+  "sentiment_policy": "excluded_from_catboost_regression"
 }

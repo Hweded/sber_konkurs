@@ -1,13 +1,16 @@
 {
-  "catboost_relative_mae_improvement": -0.08565675700298724,
+  "catboost_relative_mae_improvement": -0.015004880727100638,
   "catboost_beats_prophet": false,
-  "submission_model": "prophet",
-  "best_pooled_model_by_mae": "prophet",
+  "regime_aware_relative_mae_improvement": 0.053005179606869644,
+  "regime_aware_beats_prophet": true,
+  "submission_model": "RegimeAware Ensemble (CatBoost + Chronos-Bolt + Prophet)",
+  "best_pooled_model_by_mae": "RegimeAware Ensemble",
   "pooled_mae": {
-    "catboost": 2194.579492898576,
+    "catboost": 2051.761647562362,
     "chronos": 2667.549045242947,
     "prophet": 2021.4303266133843,
-    "ensemble": 2511.279051840269
+    "ensemble": 2515.324037430408,
+    "regime_aware": 1914.2840490884687
   },
   "chronos_fold_1_mae": 2690.877664888822,
   "chronos_fold_3_mae": 4402.76603174529,
@@ -20,12 +23,17 @@
   "news_ablation": {
     "status": "measured",
     "n": 12513,
-    "baseline_mae": 2064.275859538603,
-    "news_mae": 2194.579492898576,
-    "mae_delta": -130.303633359973,
-    "mae_improvement_pct": -6.312316871694553,
-    "leakage_check": "passed"
+    "baseline_mae": 2051.761647562362,
+    "news_mae": 2051.761647562362,
+    "mae_delta": 0.0,
+    "mae_improvement_pct": 0.0,
+    "leakage_check": "passed",
+    "production_mae_delta_pct": 0.0,
+    "sentiment_tree_effect_pct": 12.44,
+    "sentiment_policy": "excluded_from_catboost_regression"
   },
+  "news_sentiment_status": "measured",
+  "news_articles": 67808,
   "cpd_reference_catalog": "extended",
   "foundation_benchmark": "reports\\artifacts\\foundation_benchmark.json"
 }

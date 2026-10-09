@@ -1,4 +1,5 @@
 """Fold-local подготовка внешних социально-экономических признаков."""
+
 from __future__ import annotations
 
 import json
@@ -34,8 +35,14 @@ class ExternalFeaturePreprocessor:
             finite = values[np.isfinite(values)]
             self._global_medians[column] = float(finite.median()) if len(finite) else np.nan
             if "federal_district" in data:
-                grouped = data.assign(_value=values).groupby("federal_district", observed=True)["_value"].median()
-                self._district_medians[column] = {str(k): float(v) for k, v in grouped.dropna().items()}
+                grouped = (
+                    data.assign(_value=values)
+                    .groupby("federal_district", observed=True)["_value"]
+                    .median()
+                )
+                self._district_medians[column] = {
+                    str(k): float(v) for k, v in grouped.dropna().items()
+                }
         matrix = data.loc[:, list(self.feature_columns)].apply(pd.to_numeric, errors="coerce")
         matrix = matrix.fillna(pd.Series(self._global_medians))
         if self.scaler_name == "robust":
@@ -66,7 +73,9 @@ class ExternalFeaturePreprocessor:
                 values.loc[mask] = pd.to_numeric(data.loc[mask, "region_value"], errors="coerce")
                 source.loc[mask] = "region"
             if "federal_district" in data:
-                medians = data["federal_district"].astype(str).map(self._district_medians.get(column, {}))
+                medians = (
+                    data["federal_district"].astype(str).map(self._district_medians.get(column, {}))
+                )
                 mask = values.isna() & medians.notna()
                 values.loc[mask] = medians.loc[mask]
                 source.loc[mask] = "federal_district"
@@ -104,7 +113,9 @@ def add_normalized_features(
     employment = pd.to_numeric(data[employment_column], errors="coerce")
     data["wage_to_spending_ratio"] = spending.div(wage.where(wage.gt(0)))
     data["spending_per_employed"] = spending.div(employment.where(employment.gt(0)))
-    data["wage_growth_yoy"] = wage.groupby(data["mo"], observed=True).pct_change(12, fill_method=None)
+    data["wage_growth_yoy"] = wage.groupby(data["mo"], observed=True).pct_change(
+        12, fill_method=None
+    )
     return data
 
 
